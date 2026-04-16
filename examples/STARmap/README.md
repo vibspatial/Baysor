@@ -29,14 +29,14 @@ wget -P data http://pklab.med.harvard.edu/viktor/baysor/starmap/segmentation.tif
 
 ## CLI run
 
-### Without DAPI
+### With prior segmentation
 
 ```bash
-baysor -i 500 -p -c ../../configs/starmap.toml -o ./output_dapi -p ./data/molecules.csv ./data/segmentation.tiff
+baysor run --iters 500 --plot -c ../../configs/starmap.toml -o ./output_dapi ./data/molecules.csv ./data/segmentation.tiff
 ```
 
-### With DAPI
+### Without prior segmentation
 
 ```bash
-baysor -i 500 -p -c ../../configs/starmap.toml -o ./output_no_dapi -p ./data/molecules.csv
+baysor run --iters 500 --plot -c ../../configs/starmap.toml -o ./output_no_dapi ./data/molecules.csv
 ```

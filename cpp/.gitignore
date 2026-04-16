@@ -1,0 +1,18 @@
+# Build directories
+build/
+cmake-build-*/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*~
+
+# Compiled
+*.o
+*.a
+*.so
+*.dylib
+
+# vcpkg
+vcpkg_installed/

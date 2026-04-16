@@ -346,9 +346,18 @@ function bmm!(
         trace_assignment_history!(data, assignment_history_depth)
 
         if progress !== nothing
-            n_components = sum(num_of_molecules_per_cell(data) .>= min_molecules_per_cell)
+            n_mols_per_cell = num_of_molecules_per_cell(data)
+            n_total   = sum(n_mols_per_cell .>= 1)
+            n_ge2     = sum(n_mols_per_cell .>= 2)
+            n_components = sum(n_mols_per_cell .>= min_molecules_per_cell)
             noise_level = round(mean(data.assignment .== 0) * 100, digits=2)
-            next!(progress, showvalues = [("Iteration", i), ("Noise level, %", noise_level), ("Num. components", n_components)])
+            next!(progress, showvalues = [
+                ("Iteration", i),
+                ("Noise level, %", noise_level),
+                ("Num. components (total)", n_total),
+                ("Num. components (>=2)", n_ge2),
+                ("Num. components (>=$(min_molecules_per_cell))", n_components),
+            ])
         end
     end
 
@@ -362,6 +371,14 @@ function bmm!(
             drop_unused_components!(data; min_n_samples=1)
         end
         maximize!(data)
+
+        if progress !== nothing
+            n_mols_per_cell = num_of_molecules_per_cell(data)
+            n_total = sum(n_mols_per_cell .>= 1)
+            n_components = sum(n_mols_per_cell .>= min_molecules_per_cell)
+            noise_level = round(mean(data.assignment .== 0) * 100, digits=2)
+            @info "Post-refine: noise=$(noise_level)%, total=$(n_total), >=$(min_molecules_per_cell)_cells=$(n_components)"
+        end
     end
 
     return data
