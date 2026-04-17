@@ -5,6 +5,13 @@
 
 namespace baysor {
 
+namespace {
+Xoshiro256pp& global_rng_storage() {
+    static Xoshiro256pp rng(1);
+    return rng;
+}
+}
+
 // --- Counting ---
 
 std::vector<int> count_array(const std::vector<int>& values, int max_value, bool drop_zero) {
@@ -110,6 +117,31 @@ int fsample(const double* weights, int n, std::mt19937& rng) {
         cw += weights[i];
     }
     return i;
+}
+
+int fsample(const double* weights, int n, Xoshiro256pp& rng) {
+    if (n == 0) return -1;
+
+    double total = 0.0;
+    for (int i = 0; i < n; ++i) total += weights[i];
+
+    double t = rng.rand_float64() * total;
+
+    double cw = weights[0];
+    int i = 0;
+    while (cw < t && i < n - 1) {
+        ++i;
+        cw += weights[i];
+    }
+    return i;
+}
+
+Xoshiro256pp& global_xoshiro_rng() {
+    return global_rng_storage();
+}
+
+void reset_global_xoshiro_rng(std::uint64_t seed) {
+    global_rng_storage().seed(seed);
 }
 
 // --- Weighted statistics ---

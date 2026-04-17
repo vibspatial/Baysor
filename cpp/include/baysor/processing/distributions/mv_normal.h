@@ -2,6 +2,7 @@
 
 #include <Eigen/Dense>
 #include <cmath>
+#include <vector>
 
 namespace baysor {
 
@@ -42,6 +43,10 @@ struct MvNormal {
                   const double* center_probs = nullptr,
                   const ShapePrior<N>* shape_prior = nullptr,
                   int n_samples = -1);
+    void maximize_indexed(const Eigen::MatrixXd& pos_data, const int* ids, int n_points,
+                          const std::vector<double>* center_probs = nullptr,
+                          const ShapePrior<N>* shape_prior = nullptr,
+                          int n_samples = -1);
 };
 
 // Explicit instantiations declared (defined in .cpp)

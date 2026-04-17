@@ -25,7 +25,7 @@ struct SegmentationOptions {
     int n_clusters = 4;
     double prior_segmentation_confidence = 0.2;
     int iters = 500;
-    double tol = 0.005;   ///< convergence tolerance for main BMM loop (0 = run all iters)
+    double tol = 0.0;     ///< convergence tolerance for main BMM loop (0 = run all iters, matching Julia)
     int n_cells_init = 0;
     std::string nuclei_genes;
     std::string cyto_genes;

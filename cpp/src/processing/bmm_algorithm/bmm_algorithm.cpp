@@ -1,6 +1,7 @@
 #include "baysor/processing/bmm_algorithm/bmm_algorithm.h"
 #include "baysor/processing/bmm_algorithm/tracing.h"
 #include "baysor/utils/general.h"
+#include "baysor/utils/julia_int_dict.h"
 
 #include <omp.h>
 #include <spdlog/spdlog.h>
@@ -22,16 +23,19 @@ namespace baysor {
 // Internal helpers
 // ============================================================================
 
-// noise_composition_density: mean of 1/n_genes over all components
-// Matches Julia: acc += 1/comp.composition_params.n_genes for each comp
+// noise_composition_density: mean of 1/n_genes over components with non-trivial
+// composition mass, matching Julia's noise_composition_density.
 template<int N>
 static double noise_composition_density(const BmmData<N>& data) {
     if (data.components.empty()) return 0.0;
     double acc = 0.0;
+    double n_comps = 0.0;
     for (const auto& comp : data.components) {
+        if (comp.composition_params.sum_counts <= 1e-3) continue;
         acc += 1.0 / std::max(comp.composition_params.n_genes, 1);
+        n_comps += 1.0;
     }
-    return acc / static_cast<double>(data.components.size());
+    return acc / std::max(n_comps, 1.0);
 }
 
 // ============================================================================
@@ -56,36 +60,14 @@ void maximize(BmmData<N>& data, bool freeze_composition, bool freeze_position) {
         const auto& mol_ids = ids_by_comp[ci];
         int np = static_cast<int>(mol_ids.size());
 
-        // Gather positions into a contiguous column-major N×np buffer
-        std::vector<double> pos_buf(N * np);
-        for (int k = 0; k < np; ++k) {
-            int mol = mol_ids[k];
-            for (int d = 0; d < N; ++d) {
-                pos_buf[k * N + d] = data.position_data(d, mol);
-            }
-        }
+        const std::vector<double>* nuc_probs =
+            data.nuclei_prob_per_molecule.empty() ? nullptr : &data.nuclei_prob_per_molecule;
 
-        // Gather gene IDs
-        std::vector<int> gene_buf(np);
-        for (int k = 0; k < np; ++k) {
-            gene_buf[k] = data.composition_data[mol_ids[k]];
-        }
-
-        // Gather nuclei probabilities (if available)
-        const double* nuc_ptr = nullptr;
-        std::vector<double> nuc_buf;
-        if (!data.nuclei_prob_per_molecule.empty()) {
-            nuc_buf.resize(np);
-            for (int k = 0; k < np; ++k) {
-                nuc_buf[k] = data.nuclei_prob_per_molecule[mol_ids[k]];
-            }
-            nuc_ptr = nuc_buf.data();
-        }
-
-        data.components[ci].maximize(
-            pos_buf.data(), N,
-            gene_buf.data(), np,
-            nuc_ptr,
+        data.components[ci].maximize_indexed(
+            data.position_data,
+            data.composition_data,
+            mol_ids.data(), np,
+            nuc_probs,
             data.min_nuclei_frac,
             freeze_position,
             freeze_composition
@@ -188,15 +170,25 @@ void expect_dirichlet_spatial(BmmData<N>& data, bool stochastic) {
     int n_threads = omp_get_max_threads();
 
     // Per-thread buffers
-    std::vector<std::unordered_map<int,double>> comp_weights_buf(n_threads);
+    std::vector<JuliaIntDoubleDict>  comp_weights_buf(n_threads);
     std::vector<std::vector<int>>    adj_classes_buf(n_threads);
     std::vector<std::vector<double>> adj_weights_buf(n_threads);
     std::vector<std::vector<double>> denses_buf(n_threads);
-
-    // Per-thread RNGs (seeded differently per thread for reproducibility)
-    std::vector<std::mt19937> rngs(n_threads);
+    constexpr size_t reserve_hint = 64;
     for (int t = 0; t < n_threads; ++t) {
-        rngs[t].seed(static_cast<uint32_t>(42) ^ static_cast<uint32_t>(t * 2654435761u));
+        adj_classes_buf[t].reserve(reserve_hint);
+        adj_weights_buf[t].reserve(reserve_hint);
+        denses_buf[t].reserve(reserve_hint);
+    }
+
+    // For single-thread parity, continue the same RNG stream used by earlier
+    // preprocessing steps such as duplicate-point jitter in normalize_points.
+    std::vector<Xoshiro256pp> rngs;
+    if (n_threads > 1) {
+        rngs.resize(n_threads);
+        for (int t = 0; t < n_threads; ++t) {
+            rngs[t].seed(static_cast<uint32_t>(1) ^ static_cast<uint32_t>(t * 2654435761u));
+        }
     }
 
     #pragma omp parallel for schedule(dynamic, 1024)
@@ -224,13 +216,13 @@ void expect_dirichlet_spatial(BmmData<N>& data, bool stochastic) {
             if (c_id == 0) {
                 bg_comp_weight += cw;
             } else {
-                comp_weights[c_id] += cw;
+                comp_weights.add(c_id, cw);
             }
         }
-        for (auto& [c_id, cw] : comp_weights) {
+        comp_weights.for_each([&](int c_id, double cw) {
             adj_classes.push_back(c_id);
             adj_weights.push_back(cw);
-        }
+        });
 
         int n_adj = static_cast<int>(adj_classes.size());
         if (n_adj == 0 && data.confidence[mol_id] >= 1.0) {
@@ -259,9 +251,14 @@ void expect_dirichlet_spatial(BmmData<N>& data, bool stochastic) {
                 * std::exp(data.mrf_strength * adj_weights[j])
                 * comp.pdf(x, gene, data.use_gene_smoothing);
 
+            // TODO(parity): Julia currently uses `< length(cluster_per_cell)`
+            // here, which skips the last component from this penalty path.
+            // That looks like an indexing quirk rather than intended model
+            // behavior, but we keep it for parity for now.
             // Cluster penalty
             if (has_clusters
-                && c_idx < static_cast<int>(data.cluster_per_cell.size())
+                && c_adj > 0
+                && c_adj < static_cast<int>(data.cluster_per_cell.size())
                 && data.cluster_per_cell[c_idx] != mol_cluster) {
                 c_dens *= data.cluster_penalty_mult;
             }
@@ -321,7 +318,12 @@ void expect_dirichlet_spatial(BmmData<N>& data, bool stochastic) {
             }
             new_assignment[mol_id] = adj_classes[best];
         } else {
-            new_assignment[mol_id] = fsample(adj_classes.data(), denses.data(), n_total, rngs[ti]);
+            if (n_threads == 1) {
+                new_assignment[mol_id] =
+                    fsample(adj_classes.data(), denses.data(), n_total, global_xoshiro_rng());
+            } else {
+                new_assignment[mol_id] = fsample(adj_classes.data(), denses.data(), n_total, rngs[ti]);
+            }
         }
     }
 

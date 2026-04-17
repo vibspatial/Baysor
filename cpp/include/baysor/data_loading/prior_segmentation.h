@@ -35,7 +35,8 @@ std::vector<int> parse_prior_from_column(
 struct ImageSegResult {
     std::vector<int> segment_per_molecule;
     /// Pixel area (foreground pixel count) for each connected component,
-    /// indexed 1-based (component_pixel_areas[0] is unused, index k → label k).
+    /// indexed by label-1 (index 0 -> label 1).
+    /// Components filtered out by min_molecules_per_segment are zeroed.
     /// Empty for multi-label masks (not needed there).
     std::vector<size_t> component_pixel_areas;
 };

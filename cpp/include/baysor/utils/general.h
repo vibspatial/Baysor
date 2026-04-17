@@ -9,6 +9,8 @@
 #include <string>
 #include <unordered_map>
 
+#include "baysor/utils/xoshiro.h"
+
 namespace baysor {
 
 // --- Fast math inlines (match Julia @fastmath fmax/fmin/fsort) ---
@@ -44,9 +46,15 @@ std::vector<std::vector<int>> split_ids(const std::vector<int>& factor,
 
 /// Weighted categorical sample from weights[0..n-1], returns index
 int fsample(const double* weights, int n, std::mt19937& rng);
+int fsample(const double* weights, int n, Xoshiro256pp& rng);
+Xoshiro256pp& global_xoshiro_rng();
+void reset_global_xoshiro_rng(std::uint64_t seed = 1);
 
 /// Sample from arr[weights], returns arr[sampled_index]
 inline int fsample(const int* arr, const double* weights, int n, std::mt19937& rng) {
+    return arr[fsample(weights, n, rng)];
+}
+inline int fsample(const int* arr, const double* weights, int n, Xoshiro256pp& rng) {
     return arr[fsample(weights, n, rng)];
 }
 

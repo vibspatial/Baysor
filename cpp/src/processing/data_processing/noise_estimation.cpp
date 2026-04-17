@@ -70,17 +70,7 @@ static void expect_noise_probabilities(
     for (int i = 0; i < n; ++i) n1 += assignment_probs(i, 0);
     double n2 = n - n1;
 
-    // Jacobi update: snapshot current probabilities so each molecule reads from
-    // the PREVIOUS iteration state.  This removes all data dependencies between
-    // molecules and makes the loop embarrassingly parallel.  Convergence is
-    // identical to Gauss-Seidel in the limit; in practice the difference in the
-    // number of EM iterations is negligible.
-    std::vector<double> prev_p0(n);
-    #pragma omp parallel for schedule(static)
-    for (int i = 0; i < n; ++i) prev_p0[i] = assignment_probs(i, 0);
-
     int m = static_cast<int>(updating_ids.size());
-    #pragma omp parallel for schedule(dynamic, 1024)
     for (int ui = 0; ui < m; ++ui) {
         int i = updating_ids[ui];
         double c_d1 = 0.0, c_d2 = 0.0;
@@ -89,7 +79,11 @@ static void expect_noise_probabilities(
         const double* nb_wts = adj_list.neighbor_weights(i);
 
         for (int j = 0; j < nc; ++j) {
-            double ap = prev_p0[nb_ids[j]];   // read from snapshot
+            // TODO(parity): This mirrors Julia's in-place sweep semantics exactly.
+            // Later molecules in the same pass see already-updated neighbors.
+            // Revisit after parity work: a Jacobi-style or otherwise explicit
+            // EM update would be easier to reason about for stability.
+            double ap = assignment_probs(nb_ids[j], 0);
             c_d1 += nb_wts[j] * ap;
             c_d2 += nb_wts[j] * (1.0 - ap);
         }

@@ -19,6 +19,8 @@ struct CategoricalSmoothed {
 
     /// M-step: recount from assigned molecule gene IDs
     void maximize(const int* gene_ids, int n, const double* confidences = nullptr);
+    void maximize_indexed(const std::vector<int>& gene_ids, const int* ids, int n,
+                          const std::vector<double>* confidences = nullptr);
 
     void reset();
 };

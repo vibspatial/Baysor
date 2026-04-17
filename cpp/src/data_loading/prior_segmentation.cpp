@@ -229,6 +229,27 @@ std::pair<double, double> estimate_scale_from_image_areas(
     return {median_radius, mad};
 }
 
+static void filter_component_pixel_areas_by_molecules(
+    std::vector<size_t>& component_pixel_areas,
+    const std::vector<int>& segment_per_molecule,
+    int min_molecules_per_segment
+) {
+    if (min_molecules_per_segment <= 0 || component_pixel_areas.empty()) return;
+
+    std::vector<int> molecule_counts(component_pixel_areas.size(), 0);
+    for (int label : segment_per_molecule) {
+        if (label > 0 && label <= static_cast<int>(molecule_counts.size())) {
+            molecule_counts[label - 1]++;
+        }
+    }
+
+    for (size_t i = 0; i < component_pixel_areas.size(); ++i) {
+        if (molecule_counts[i] < min_molecules_per_segment) {
+            component_pixel_areas[i] = 0;
+        }
+    }
+}
+
 // ============================================================================
 // Image-based segmentation loading (TIFF label mask)
 // ============================================================================
@@ -387,6 +408,11 @@ ImageSegResult load_prior_from_image(
 
         int n_labels = next_label - 1;
         spdlog::info("Connected-component labelling: {} nuclei found", n_labels);
+
+        // Match Julia: estimate scale only from components that survive
+        // the molecule-overlap filtering applied to the prior labels.
+        filter_component_pixel_areas_by_molecules(
+            pixel_areas, segment_per_molecule, min_molecules_per_segment);
 
     } else {
         // ---------------------------------------------------------------

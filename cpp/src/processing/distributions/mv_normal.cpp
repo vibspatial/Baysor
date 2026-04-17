@@ -16,7 +16,9 @@ MvNormal<N>::MvNormal(const Vec& mu, const Mat& sigma)
 template<int N>
 void MvNormal<N>::update_cache() {
     sigma_inv = sigma.inverse();
-    pdf_divider = 0.5 * std::log(std::pow(2.0 * M_PI, N) * sigma.determinant());
+    // Match Julia's current MvNormalF implementation exactly. In 2D it uses
+    // a hardcoded (2π)^3 normalization term rather than (2π)^N.
+    pdf_divider = 0.5 * std::log(std::pow(2.0 * M_PI, 3) * sigma.determinant());
 }
 
 template<int N>
@@ -77,6 +79,54 @@ void MvNormal<N>::maximize(const double* pos_data, int n_points, int stride,
     update_cache();
 }
 
+template<int N>
+void MvNormal<N>::maximize_indexed(const Eigen::MatrixXd& pos_data, const int* ids, int n_points,
+                                   const std::vector<double>* center_probs,
+                                   const ShapePrior<N>* shape_prior,
+                                   int n_samples) {
+    if (n_points == 0) return;
+
+    mu.setZero();
+    double sum_w = 0.0;
+
+    for (int i = 0; i < n_points; ++i) {
+        int mol_id = ids[i];
+        double w = (center_probs != nullptr) ? std::max((*center_probs)[mol_id], 0.01) : 1.0;
+        for (int j = 0; j < N; ++j) {
+            mu[j] += pos_data(j, mol_id) * w;
+        }
+        sum_w += w;
+    }
+    mu /= sum_w;
+
+    if (n_points <= N) {
+        update_cache();
+        return;
+    }
+
+    sigma.setZero();
+    for (int i = 0; i < n_points; ++i) {
+        int mol_id = ids[i];
+        for (int r = 0; r < N; ++r) {
+            double dr = pos_data(r, mol_id) - mu[r];
+            for (int c = 0; c < N; ++c) {
+                double dc = pos_data(c, mol_id) - mu[c];
+                sigma(r, c) += dr * dc;
+            }
+        }
+    }
+    sigma /= static_cast<double>(n_points);
+
+    if (shape_prior != nullptr) {
+        int ns = (n_samples >= 0) ? n_samples : n_points;
+        adjust_cov_by_prior<N>(sigma, *shape_prior, ns);
+    } else {
+        adjust_cov_matrix<N>(sigma);
+    }
+
+    update_cache();
+}
+
 // ============================================================================
 // adjust_cov_matrix: nudge diagonal until positive-definite
 // ============================================================================
@@ -117,11 +167,12 @@ template<int N>
 void adjust_cov_by_prior(Eigen::Matrix<double, N, N>& sigma, const ShapePrior<N>& prior, int n_samples) {
     using Mat = Eigen::Matrix<double, N, N>;
 
-    // Numerical fix: if off-diagonal is negligible relative to diagonal, zero it
-    // (matches Julia's temporary fix for StaticArrays Cholesky issue)
+    // Match Julia's current temporary fix exactly. It checks the signed ratio,
+    // not the absolute ratio, so any sufficiently negative covariance entry is
+    // also zeroed before the eigendecomposition.
     if (N >= 2) {
-        double diag_max = std::max(sigma(0, 0), sigma(1, 1));
-        if (diag_max > 1e-30 && std::abs(sigma(1, 0)) / diag_max < 1e-5) {
+        double ratio = sigma(1, 0) / std::max(sigma(0, 0), sigma(1, 1));
+        if (ratio < 1e-5) {
             sigma(0, 1) = sigma(1, 0) = 0.0;
         }
     }

@@ -4,6 +4,7 @@
 #include "baysor/processing/distributions/categorical_smoothed.h"
 #include <optional>
 #include <unordered_map>
+#include <vector>
 
 namespace baysor {
 
@@ -42,6 +43,13 @@ struct Component {
                   double min_nuclei_frac = 0.1,
                   bool freeze_position = false,
                   bool freeze_composition = false);
+    void maximize_indexed(const Eigen::MatrixXd& pos_data,
+                          const std::vector<int>& gene_ids,
+                          const int* mol_ids, int n_points,
+                          const std::vector<double>* nuclei_probs = nullptr,
+                          double min_nuclei_frac = 0.1,
+                          bool freeze_position = false,
+                          bool freeze_composition = false);
 };
 
 extern template struct Component<2>;

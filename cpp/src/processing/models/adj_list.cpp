@@ -14,50 +14,42 @@ AdjList AdjList::from_edge_list(
         return adj;
     }
 
-    // Undirected: each edge (u, v) appears as both (u, v) and (v, u)
-    int n_directed = n_edges * 2;
-
-    struct DirEdge {
-        int src, dst;
-        double weight;
-    };
-
-    std::vector<DirEdge> edges(n_directed);
-    for (int i = 0; i < n_edges; ++i) {
-        edges[2 * i]     = {edges_src[i], edges_dst[i], edge_weights[i]};
-        edges[2 * i + 1] = {edges_dst[i], edges_src[i], edge_weights[i]};
-    }
-
-    // Sort by (src, dst)
-    std::sort(edges.begin(), edges.end(), [](const DirEdge& a, const DirEdge& b) {
-        return a.src < b.src || (a.src == b.src && a.dst < b.dst);
-    });
-
-    // Deduplicate: same (src, dst) pair — keep the first occurrence
-    auto last = std::unique(edges.begin(), edges.end(), [](const DirEdge& a, const DirEdge& b) {
-        return a.src == b.src && a.dst == b.dst;
-    });
-    edges.erase(last, edges.end());
-    n_directed = static_cast<int>(edges.size());
-
-    // Build CSR
+    // Match Julia's convert_edge_list_to_adj_list ordering:
+    // for each vertex, first edges where it is in edge_src (in input order),
+    // then edges where it is in edge_dst (also in input order).
     AdjList adj;
     adj.indptr.assign(n_verts + 1, 0);
-    adj.indices.resize(n_directed);
-    adj.weights.resize(n_directed);
-
-    // Count per row
-    for (int i = 0; i < n_directed; ++i) {
-        adj.indptr[edges[i].src + 1]++;
+    for (int i = 0; i < n_edges; ++i) {
+        adj.indptr[edges_src[i] + 1]++;
+        adj.indptr[edges_dst[i] + 1]++;
     }
-    // Prefix sum
+
     for (int i = 1; i <= n_verts; ++i) {
         adj.indptr[i] += adj.indptr[i - 1];
     }
-    // Fill
-    for (int i = 0; i < n_directed; ++i) {
-        adj.indices[i] = edges[i].dst;
-        adj.weights[i] = edges[i].weight;
+
+    const int n_directed = n_edges * 2;
+    adj.indices.resize(n_directed);
+    adj.weights.resize(n_directed);
+
+    std::vector<int32_t> write_pos = adj.indptr;
+
+    for (int i = 0; i < n_edges; ++i) {
+        const int src = edges_src[i];
+        const int dst = edges_dst[i];
+        const double w = edge_weights[i];
+        const int pos = write_pos[src]++;
+        adj.indices[pos] = dst;
+        adj.weights[pos] = w;
+    }
+
+    for (int i = 0; i < n_edges; ++i) {
+        const int src = edges_dst[i];
+        const int dst = edges_src[i];
+        const double w = edge_weights[i];
+        const int pos = write_pos[src]++;
+        adj.indices[pos] = dst;
+        adj.weights[pos] = w;
     }
 
     return adj;

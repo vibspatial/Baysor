@@ -5,6 +5,12 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+# Prefer optimized single-config builds unless the user explicitly chose
+# something else. This does not affect multi-config generators.
+if(NOT CMAKE_CONFIGURATION_TYPES AND NOT CMAKE_BUILD_TYPE)
+    set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
+endif()
+
 # Options
 option(BAYSOR_WITH_CUDA "Enable CUDA/GPU support" OFF)
 option(BAYSOR_WITH_TESTS "Build tests" ON)

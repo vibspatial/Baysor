@@ -23,8 +23,9 @@ namespace baysor {
 //
 // Input:  X  — data matrix (n_features × n_samples)
 //         n_components — number of independent components
-// Returns: mixing matrix A (n_features × n_components)
-//          where X ≈ A * S  (columns of A are the mixing directions)
+// Returns: unmixing matrix W (n_features × n_components)
+//          whose columns correspond to the components used by Julia's
+//          MultivariateStats.ICA fit via ica_fit.W.
 //
 // Mirrors Julia's MultivariateStats.ICA usage in cluster_molecules_on_mrf.
 // ============================================================================
@@ -39,66 +40,95 @@ static Eigen::MatrixXd fast_ica(
     int n_samples  = static_cast<int>(X.cols());
     if (n_components > n_features) n_components = n_features;
 
-    // 1. Center: subtract column mean
+    // 1. Center rows to match Julia's preprocess_mean/centralize path.
     Eigen::VectorXd mean_vec = X.rowwise().mean();
     Eigen::MatrixXd Xc = X.colwise() - mean_vec;
 
-    // 2. Whiten: PCA → keep top n_components directions
-    Eigen::MatrixXd cov = (Xc * Xc.transpose()) / static_cast<double>(n_samples);
+    // 2. Whiten with the top-k covariance eigenvectors, matching:
+    //    C = Z * Z' / (n - 1); W0 = P * Diagonal(1 ./ sqrt.(v)); Z = W0' * Z
+    Eigen::MatrixXd cov =
+        (Xc * Xc.transpose()) / static_cast<double>(std::max(1, n_samples - 1));
     Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> eig(cov);
-    // eigenvalues in ascending order; take last n_components
-    Eigen::VectorXd lambdas = eig.eigenvalues().tail(n_components);
-    Eigen::MatrixXd V       = eig.eigenvectors().rightCols(n_components);  // n_features × n_components
+    Eigen::VectorXd lambdas(n_components);
+    Eigen::MatrixXd P(n_features, n_components);
+    for (int i = 0; i < n_components; ++i) {
+        int src_idx = n_features - 1 - i;
+        lambdas(i) = eig.eigenvalues()(src_idx);
+        P.col(i) = eig.eigenvectors().col(src_idx);
+    }
 
     // Clamp tiny eigenvalues to avoid division by ~0
     for (int i = 0; i < n_components; ++i)
         if (lambdas(i) < 1e-10) lambdas(i) = 1e-10;
 
-    // Whitened data Z: n_components × n_samples
-    // Z = diag(1/sqrt(λ)) * V^T * Xc
-    Eigen::MatrixXd Z = (lambdas.cwiseSqrt().cwiseInverse().asDiagonal()) * (V.transpose() * Xc);
-
-    // 3. Fixed-point FastICA (deflation)
-    // Each row of W_z is an unmixing direction in the whitened space
-    Eigen::MatrixXd W_z(n_components, n_components);
-    W_z.setZero();
+    Eigen::MatrixXd W0 =
+        P * lambdas.cwiseSqrt().cwiseInverse().asDiagonal(); // m × k
+    Eigen::MatrixXd Z = W0.transpose() * Xc;                // k × n
 
     std::mt19937 rng(seed);
     std::normal_distribution<double> ndist(0.0, 1.0);
-
-    for (int i = 0; i < n_components; ++i) {
-        // Random init
-        Eigen::VectorXd w(n_components);
-        for (int j = 0; j < n_components; ++j) w(j) = ndist(rng);
-        w.normalize();
-
-        for (int iter = 0; iter < max_iter; ++iter) {
-            Eigen::VectorXd proj = Z.transpose() * w;           // n_samples
-            Eigen::VectorXd g    = proj.array().tanh();          // g(u)  = tanh(u)
-            Eigen::VectorXd gd   = 1.0 - g.array().square();    // g'(u) = 1 - tanh²(u)
-
-            Eigen::VectorXd w_new = (Z * g) / n_samples
-                                  - gd.mean() * w;
-
-            // Gram-Schmidt deflation
-            for (int k = 0; k < i; ++k)
-                w_new -= w_new.dot(W_z.row(k)) * W_z.row(k).transpose();
-
-            w_new.normalize();
-
-            double delta = (w_new - w).norm();
-            w = w_new;
-            if (delta < tol) break;
+    Eigen::MatrixXd W(n_components, n_components);
+    for (int c = 0; c < n_components; ++c) {
+        for (int r = 0; r < n_components; ++r) {
+            W(r, c) = ndist(rng);
         }
-
-        W_z.row(i) = w.transpose();
+        double norm = W.col(c).norm();
+        if (norm > 0.0) W.col(c) /= norm;
     }
 
-    // 4. Compute mixing matrix in original space:
-    //    A_orig = V * diag(sqrt(λ)) * W_z^T
-    Eigen::MatrixXd A = V * lambdas.cwiseSqrt().asDiagonal() * W_z.transpose();
-    // A: n_features × n_components
-    return A;
+    Eigen::MatrixXd W_prev(n_components, n_components);
+    Eigen::MatrixXd U(n_samples, n_components);
+    Eigen::MatrixXd Y(n_components, n_components);
+    Eigen::VectorXd E1(n_components);
+
+    for (int iter = 0; iter < max_iter; ++iter) {
+        W_prev = W;
+
+        // U <- W' * X, stored as (n_samples × n_components)
+        U.noalias() = Z.transpose() * W;
+
+        // Tanh nonlinearity with a=1 and mean derivative per component.
+        for (int c = 0; c < n_components; ++c) {
+            double deriv_sum = 0.0;
+            for (int i = 0; i < n_samples; ++i) {
+                double t = std::tanh(U(i, c));
+                U(i, c) = t;
+                deriv_sum += 1.0 - t * t;
+            }
+            E1(c) = deriv_sum / static_cast<double>(n_samples);
+        }
+
+        // Y <- E{x g(w'x)}
+        Y.noalias() = (Z * U) / static_cast<double>(n_samples);
+
+        // W <- Y - E{g'(w'x)} * W
+        for (int c = 0; c < n_components; ++c) {
+            W.col(c) = Y.col(c) - E1(c) * W.col(c);
+        }
+
+        // Symmetric decorrelation: W <- W * (W'W)^(-1/2)
+        Eigen::MatrixXd gram = W.transpose() * W;
+        Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> gram_eig(gram);
+        Eigen::VectorXd gram_vals = gram_eig.eigenvalues();
+        for (int i = 0; i < gram_vals.size(); ++i) {
+            if (gram_vals(i) < 1e-10) gram_vals(i) = 1e-10;
+        }
+        Eigen::MatrixXd invsqrt =
+            gram_eig.eigenvectors() *
+            gram_vals.cwiseSqrt().cwiseInverse().asDiagonal() *
+            gram_eig.eigenvectors().transpose();
+        W = W * invsqrt;
+
+        Eigen::MatrixXd prod = W * W_prev.transpose();
+        double chg = 0.0;
+        for (int i = 0; i < n_components; ++i) {
+            chg = std::max(chg, std::abs(std::abs(prod(i, i)) - 1.0));
+        }
+        if (chg < tol) break;
+    }
+
+    // 4. Map the whitened solution back to the original feature space.
+    return W0 * W;
 }
 
 // ============================================================================
@@ -179,13 +209,9 @@ ClusteringResult cluster_molecules_on_mrf(
 
     if (exprs_init && exprs_init->rows() == n_clusters
                    && exprs_init->cols() == n_genes) {
-        // Use provided initialization (ICA result), row-normalize
+        // Use provided initialization directly, matching Julia's
+        // init_cell_type_exprs(..., cell_type_exprs=...) fast path.
         exprs = *exprs_init;
-        for (int k = 0; k < n_clusters; ++k) {
-            double rs = exprs.row(k).sum();
-            if (rs > 1e-10) exprs.row(k) /= rs;
-            else            exprs.row(k).fill(1.0 / n_genes);
-        }
     } else {
         // Fallback: deterministic hash perturbation of global gene frequency
         // Mirrors Julia's init_cell_type_exprs (init_mod=10000 path)
@@ -200,12 +226,10 @@ ClusteringResult cluster_molecules_on_mrf(
                 exprs(k, g) = gene_freq[g] * (0.95 + noise);
                 row_sum += exprs(k, g);
             }
-            // Pseudocount normalize matching Julia: (x+1)/(sum+1) per element
-            double norm = row_sum + static_cast<double>(n_genes);
+            // Pseudocount smoothing matching Julia: (x + 1) / (sum(x) + 1)
+            double norm = row_sum + 1.0;
             for (int g = 0; g < n_genes; ++g)
-                exprs(k, g) = (exprs(k, g) + 1.0) / (norm + n_genes);
-            double rs2 = exprs.row(k).sum();
-            if (rs2 > 0) exprs.row(k) /= rs2;
+                exprs(k, g) = (exprs(k, g) + 1.0) / norm;
         }
     }
 
@@ -285,11 +309,12 @@ ClusteringResult cluster_molecules_on_mrf(
                 exprs(k, g0) += conf * probs(k, i);
             }
         }
-        // Add pseudocount and row-normalize
-        exprs.array() += 1.0;
         for (int k = 0; k < n_clusters; ++k) {
             double row_sum = exprs.row(k).sum();
-            if (row_sum > 0) exprs.row(k) /= row_sum;
+            double norm = row_sum + 1.0;
+            for (int g = 0; g < n_genes; ++g) {
+                exprs(k, g) = (exprs(k, g) + 1.0) / norm;
+            }
         }
 
         // ---- Convergence check ----
@@ -303,7 +328,7 @@ ClusteringResult cluster_molecules_on_mrf(
                 if (d > mol_max) mol_max = d;
                 if (d > max_diff) max_diff = d;
             }
-            if (mol_max > 0.05) ++n_changed;
+            if (mol_max > 1e-7) ++n_changed;
         }
         max_diffs.push_back(max_diff);
         change_fracs.push_back(static_cast<double>(n_changed) / n_mols);
@@ -314,8 +339,8 @@ ClusteringResult cluster_molecules_on_mrf(
         }
 
         // Stop if last n_iters_without_update all below tol
-        if (iter >= n_iters_without_update) {
-            int look_back = std::min(n_iters_without_update,
+        if (iter + 1 > n_iters_without_update) {
+            int look_back = std::min(n_iters_without_update + 1,
                                      static_cast<int>(max_diffs.size()));
             double worst = 0.0;
             for (int t = static_cast<int>(max_diffs.size()) - look_back;
@@ -399,19 +424,19 @@ ClusteringResult cluster_molecules_ica(
     Eigen::MatrixXd cor_mat = pairwise_gene_spatial_cor(genes, confidence, adj_list);
     // cor_mat is indexed 0-based (genes 0..n_genes-1 from 1-based input)
 
-    // 2. FastICA on the correlation matrix → mixing matrix (n_genes × n_clusters)
+    // 2. FastICA on the correlation matrix → unmixing matrix (n_genes × n_clusters)
     std::unique_ptr<Eigen::MatrixXd> exprs_init_ptr;
     try {
-        Eigen::MatrixXd A = fast_ica(cor_mat, n_clusters);
+        Eigen::MatrixXd W = fast_ica(cor_mat, n_clusters);
         // Convert mixing matrix to expression profiles:
-        //   ct_exprs_init[k][g] = abs(A[g][k]) / sum_g'(abs(A[g'][k]))
+        //   ct_exprs_init[k][g] = abs(W[g][k]) / sum_g'(abs(W[g'][k]))
         // Matches Julia: (abs.(ica_fit.W) ./ sum(abs.(ica_fit.W), dims=1))'
         Eigen::MatrixXd exprs(n_clusters, n_genes);
         for (int k = 0; k < n_clusters; ++k) {
-            double col_sum = A.col(k).cwiseAbs().sum();
+            double col_sum = W.col(k).cwiseAbs().sum();
             if (col_sum < 1e-10) col_sum = 1.0;
             for (int g = 0; g < n_genes; ++g)
-                exprs(k, g) = std::abs(A(g, k)) / col_sum;
+                exprs(k, g) = std::abs(W(g, k)) / col_sum;
         }
         exprs_init_ptr = std::make_unique<Eigen::MatrixXd>(std::move(exprs));
         if (verbose) spdlog::info("ICA initialization succeeded ({} components).", n_clusters);

@@ -42,6 +42,7 @@ int cmd_run(
     RunOptions& opts,
     const std::string& output,
     bool plot,
+    bool skip_ncv_color,
     const std::string& polygon_format,
     const std::string& count_matrix_format,
     const std::string& cli_cmd
@@ -84,9 +85,10 @@ int cmd_run(
     spdlog::info("Using scale={:.2f}, scale_std={}",
                  opts.segmentation.scale, opts.segmentation.scale_std);
 
-    // Confidence estimation
+    double psc = opts.segmentation.prior_segmentation_confidence;
+
     spdlog::info("Estimating confidence...");
-    append_confidence(data, opts.data.confidence_nn_id);
+    append_confidence(data, opts.data.confidence_nn_id, psc);
 
     // Build molecule adjacency graph (MRF)
     spdlog::info("Building molecule graph...");
@@ -119,11 +121,9 @@ int cmd_run(
     }
 
     int min_mols     = opts.data.min_molecules_per_cell;
-    int min_mols_seg = opts.data.min_molecules_per_segment;  // used during EM iterations
     int n_iters   = opts.segmentation.iters;
     double scale  = opts.segmentation.scale;
     int n_cells   = opts.segmentation.n_cells_init;
-    double psc    = opts.segmentation.prior_segmentation_confidence;
     const std::string& scale_std = opts.segmentation.scale_std;
 
     // Optional molecule clustering (pre-segmentation cell type assignment)
@@ -158,10 +158,9 @@ int cmd_run(
 
         spdlog::info("Running segmentation ({} iters, history_depth={}, tol={})...",
                      n_iters, history_depth, opts.segmentation.tol);
-        // min_mols_seg (min_molecules_per_segment) = per-iteration drop threshold (matches
-        // Julia's hardcoded min_n_samples=2 in drop_unused_components!).
-        // min_mols = min_molecules_per_cell = display threshold (matches Julia's progress bar).
-        bmm(bm_data, min_mols_seg, n_iters,
+        // Julia hardcodes min_n_samples=2 in drop_unused_components! — match that exactly.
+        // min_mols = min_molecules_per_cell = display threshold only.
+        bmm(bm_data, /*min_molecules_drop=*/2, n_iters,
             history_depth,
             /*verbose=*/true,
             /*component_split_step=*/3,
@@ -175,10 +174,9 @@ int cmd_run(
         int n_cells_final = bm_data.n_components();
         spdlog::info("Segmentation complete: {} cells.", n_cells_final);
 
-        // Compute neighborhood composition colors (ncv_color)
-        spdlog::info("Computing neighborhood composition colors...");
         std::vector<std::string> ncv_color;
-        {
+        if (!skip_ncv_color) {
+            spdlog::info("Computing neighborhood composition colors...");
             int comp_k = opts.plotting.gene_composition_neighborhood;
             auto pos = data.position_matrix();
             auto neighb_cm = neighborhood_count_matrix(pos, data.gene, comp_k, data.n_genes());
@@ -570,6 +568,7 @@ int main(int argc, char* argv[]) {
     std::string run_polygon_format = "FeatureCollection";
     std::string run_count_format = "loom";
     bool run_plot = false;
+    bool run_skip_ncv_color = false;
 
     run->add_option("coordinates", run_coordinates,
         "CSV or Parquet file with coordinates of molecules and gene type")
@@ -613,6 +612,8 @@ int main(int argc, char* argv[]) {
         "Count matrix format: loom or tsv (default: loom)");
     run->add_flag("-p,--plot", run_plot,
         "Save an HTML diagnostic plot");
+    run->add_flag("--skip-ncv-color", run_skip_ncv_color,
+        "Skip neighborhood composition color embedding to speed up development runs");
     run->add_flag("--force-2d", opts.data.force_2d,
         "Ignore z-column in the data");
     run->add_option("--iters", opts.segmentation.iters,
@@ -700,7 +701,7 @@ int main(int argc, char* argv[]) {
             return 1;
         }
         return cmd_run(run_coordinates, run_prior_seg, opts, run_output,
-                       run_plot, run_polygon_format, run_count_format, cli_cmd);
+                       run_plot, run_skip_ncv_color, run_polygon_format, run_count_format, cli_cmd);
     }
 
     if (preview->parsed()) {

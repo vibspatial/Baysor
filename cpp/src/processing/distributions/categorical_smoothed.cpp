@@ -43,6 +43,24 @@ void CategoricalSmoothed::maximize(const int* gene_ids, int n, const double* con
     }
 }
 
+void CategoricalSmoothed::maximize_indexed(const std::vector<int>& gene_ids, const int* ids, int n,
+                                           const std::vector<double>* confidences) {
+    std::fill(counts.begin(), counts.end(), 0.0);
+    sum_counts = 0.0;
+    n_genes = 0;
+
+    for (int i = 0; i < n; ++i) {
+        int mol_id = ids[i];
+        int g = gene_ids[mol_id];
+        if (g < 0 || g >= static_cast<int>(counts.size())) continue;
+
+        double w = (confidences != nullptr) ? (*confidences)[mol_id] : 1.0;
+        if (counts[g] < 1e-10) n_genes++;
+        counts[g] += w;
+        sum_counts += w;
+    }
+}
+
 void CategoricalSmoothed::reset() {
     std::fill(counts.begin(), counts.end(), 0.0);
     sum_counts = 0.0;
