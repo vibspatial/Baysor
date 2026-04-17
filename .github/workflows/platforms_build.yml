@@ -1,63 +1,40 @@
-# name: platforms_build
+name: platforms_build
 
-# on:
-#   push:
-#     tags:
-#       - v*
-# jobs:
-#   build_and_release:
-#     name: Julia ${{ matrix.version }} - ${{ matrix.os }} - ${{ matrix.arch }} - ${{ github.event_name }}
-#     runs-on: ${{ matrix.os }}
-#     strategy:
-#       fail-fast: false
-#       matrix:
-#         version:
-#           - '1.8.5'
-#         os: [ubuntu-20.04]
-#         arch:
-#           - x64
-#     steps:
-#       - name: Checkout
-#         uses: actions/checkout@v2
+on:
+  push:
+  pull_request:
 
-#       - name: Julia setup
-#         uses: julia-actions/setup-julia@v1
-#         with:
-#           version: ${{ matrix.version }}
-#           arch: ${{ matrix.arch }}
+jobs:
+  build_and_test:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
 
-#       - name: Install Baysor
-#         run: |
-#           echo ${{ env.RELEASE_VERSION }} && julia -e 'using Pkg; Pkg.add(PackageSpec(path="."));'
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential \
+            cmake \
+            ninja-build \
+            pkg-config \
+            libeigen3-dev \
+            libomp-dev \
+            libspdlog-dev \
+            libcgal-dev \
+            libarrow-dev \
+            libparquet-dev \
+            libhdf5-dev \
+            nlohmann-json3-dev \
+            libtiff-dev \
+            libgtest-dev
 
-#       - name: Install dependencies
-#         run: |
-#           julia -e 'import Baysor, Pkg; Pkg.activate(dirname(dirname(pathof(Baysor)))); Pkg.instantiate();'
+      - name: Configure
+        run: cmake -S . -B build -GNinja
 
-#       # - name: Build binary
-#       #   run: |
-#       #     LazyModules_lazyload=false julia --project ./deps/build.jl app
+      - name: Build
+        run: cmake --build build
 
-#       # - name: Prepare distribution archives
-#       #   run: |
-#       #     zip -r baysor_${{ matrix.os }}_${{ matrix.arch }}_build.zip LICENSE README.MD ./bin/baysor/*
-
-#       - name: Prepare distribution archives
-#         run: |
-#           zip -r baysor_${{ matrix.os }}_${{ matrix.arch }}_build.zip ./src/*
-
-#       - name: 'Upload Artifact'
-#         uses: actions/upload-artifact@v3
-#         with:
-#           name: my-artifact
-#           path: baysor_${{ matrix.os }}_${{ matrix.arch }}_build.zip
-#           retention-days: 5
-
-#       # - name: Release
-#       #   uses: softprops/action-gh-release@v1
-#       #   if: startsWith(github.ref, 'refs/tags/')
-#       #   with:
-#       #     files: |
-#       #       LICENSE
-#       #       README.MD
-#       #       baysor_${{ matrix.os }}_${{ matrix.arch }}_build.zip
+      - name: Test
+        run: ctest --test-dir build --output-on-failure

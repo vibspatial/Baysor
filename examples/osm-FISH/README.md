@@ -47,11 +47,11 @@ io.imsave("./data/segmentation.tiff", segmentation_mask.T.astype(np.uint16))
 ### Without prior segmentation
 
 ```bash
-baysor run --iters 500 --plot -c ../../configs/osm_fish.toml -o ./output_no_dapi ./data/mRNA_coords_raw_counting.csv
+baysor run --iters 500 --plot --scale 82 --scale-std 48 -c ../../configs/osm_fish.toml -o ./output_no_dapi ./data/mRNA_coords_raw_counting.csv
 ```
 
-### With prior segmentation (cell centers)
+### With prior segmentation image
 
 ```bash
-baysor run --iters 500 --plot -c ../../configs/osm_fish.toml -o ./output_dapi ./data/mRNA_coords_raw_counting.csv ./data/centers_from_segmentation.csv
+baysor run --iters 500 --plot -c ../../configs/osm_fish.toml -o ./output_dapi ./data/mRNA_coords_raw_counting.csv ./data/segmentation.tiff
 ```

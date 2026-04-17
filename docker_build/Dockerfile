@@ -1,16 +1,46 @@
-FROM ubuntu:20.04
+FROM ubuntu:24.04 AS build
 
-RUN apt-get update && apt-get install -y build-essential
-RUN apt install -y curl
-RUN curl -fsSL https://install.julialang.org | sh -s -- -y
+ENV DEBIAN_FRONTEND=noninteractive
 
-ENV PATH="/root/.juliaup/bin:${PATH}"
-ENV JULIA_NUM_THREADS=30
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    cmake \
+    ninja-build \
+    pkg-config \
+    git \
+    libeigen3-dev \
+    libomp-dev \
+    libspdlog-dev \
+    libcgal-dev \
+    libarrow-dev \
+    libparquet-dev \
+    libhdf5-dev \
+    nlohmann-json3-dev \
+    libtiff-dev \
+    && rm -rf /var/lib/apt/lists/*
 
-# ### Ignore cache (https://stackoverflow.com/questions/35134713/disable-cache-for-specific-run-commands)
-# # ARG CACHEBUST=1
-# RUN julia -e 'using Pkg; Pkg.add(PackageSpec(url="https://github.com/kharchenkolab/Baysor.git#develop"));'
-# RUN julia -e 'using Pkg; Pkg.develop("Baysor");'
+WORKDIR /src
+COPY . .
 
-# ENTRYPOINT ["/bin/bash"]
-# WORKDIR /root/.julia/dev/Baysor/
+RUN cmake -S . -B build -GNinja -DBAYSOR_WITH_TESTS=OFF
+RUN cmake --build build --target baysor -j"$(nproc)"
+
+FROM ubuntu:24.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libeigen3-dev \
+    libomp-dev \
+    libspdlog-dev \
+    libcgal-dev \
+    libarrow-dev \
+    libparquet-dev \
+    libhdf5-dev \
+    nlohmann-json3-dev \
+    libtiff-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=build /src/build/baysor /usr/local/bin/baysor
+
+ENTRYPOINT ["/usr/local/bin/baysor"]

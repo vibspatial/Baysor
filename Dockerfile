@@ -1,21 +1,46 @@
-FROM julia:latest
+FROM ubuntu:24.04 AS build
 
-RUN apt-get update && apt-get install -y build-essential
+ENV DEBIAN_FRONTEND=noninteractive
 
-ENV JULIA_NUM_THREADS=30
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    cmake \
+    ninja-build \
+    pkg-config \
+    git \
+    libeigen3-dev \
+    libomp-dev \
+    libspdlog-dev \
+    libcgal-dev \
+    libarrow-dev \
+    libparquet-dev \
+    libhdf5-dev \
+    nlohmann-json3-dev \
+    libtiff-dev \
+    && rm -rf /var/lib/apt/lists/*
 
-### Ignore cache (https://stackoverflow.com/questions/35134713/disable-cache-for-specific-run-commands)
-ARG CACHEBUST=1
-RUN julia -e 'using Pkg; Pkg.add(PackageSpec(url="https://github.com/kharchenkolab/Baysor.git"));'
+WORKDIR /src
+COPY . .
 
-ENV LazyModules_lazyload false
+RUN cmake -S . -B build -GNinja -DBAYSOR_WITH_TESTS=OFF
+RUN cmake --build build --target baysor -j"$(nproc)"
 
-RUN julia -e 'import Baysor, Pkg; Pkg.activate(dirname(dirname(pathof(Baysor)))); Pkg.instantiate(); Pkg.build();'
-RUN echo "export PATH=/root/.julia/bin/:$PATH" >> ~/.bashrc
-RUN echo "alias julia='/usr/local/julia/bin/julia --sysimage=/root/.julia/scratchspaces/cc9f9468-1fbe-11e9-0acf-e9460511877c/sysimg/libbaysor.so'" >> ~/.bashrc
-RUN ln -s /root/.julia/bin/baysor /usr/local/bin/baysor
+FROM ubuntu:24.04
 
-RUN /root/.julia/bin/baysor --help
+ENV DEBIAN_FRONTEND=noninteractive
 
-ENTRYPOINT ["/bin/bash"]
-WORKDIR /root/
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libeigen3-dev \
+    libomp-dev \
+    libspdlog-dev \
+    libcgal-dev \
+    libarrow-dev \
+    libparquet-dev \
+    libhdf5-dev \
+    nlohmann-json3-dev \
+    libtiff-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=build /src/build/baysor /usr/local/bin/baysor
+
+ENTRYPOINT ["/usr/local/bin/baysor"]

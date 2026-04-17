@@ -1,17 +1,27 @@
 .ipynb_checkpoints/
 .idea/
-builddir
-
-bin
+build/
+build-*/
+builddir/
+compile_commands.json
 build.log
 *.zip
 
 *.DS_Store
 .vscode
 .history
+.claude/
+.claude
+.codex/
+.codex
+Manifest.toml.bak
 
 examples/*/data*
 examples/*/output_*
+examples/*/crop_*
+examples/osm-FISH/make_mock_tiff_from_centers.py
 
-docs/build/
+tmp/
+cpp/build*/
+cpp/tmp/
 gh_key.sh

@@ -16,7 +16,7 @@ mkdir -p data output_dapi output_no_dapi
 In this example we used "visual_1020/20180410-BY3_1kgenes" dataset. To convert it to a proper format you need to download files "goodPoints.mat", "labels.npz" and "cell_barcode_names.csv" (which, indeed, contains gene barcodes) to the "data" folder. From there you need to run the converting script:
 
 ```bash
-julia ../convert_to_csv.jl goodPoints.mat cell_barcode_names.csv labels.npz
+python3 ../convert_to_csv.py goodPoints.mat cell_barcode_names.csv labels.npz
 ```
 
 *OR*
@@ -38,5 +38,5 @@ baysor run --iters 500 --plot -c ../../configs/starmap.toml -o ./output_dapi ./d
 ### Without prior segmentation
 
 ```bash
-baysor run --iters 500 --plot -c ../../configs/starmap.toml -o ./output_no_dapi ./data/molecules.csv
+baysor run --iters 500 --plot --scale 89.995 --scale-std 16.398 -c ../../configs/starmap.toml -o ./output_no_dapi ./data/molecules.csv
 ```

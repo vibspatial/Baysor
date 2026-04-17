@@ -30,13 +30,6 @@ T = table(x, y, gene, is_combinatorial, intensity, score);
 writetable(T, "pciSeq_3-3.csv");
 ```
 
-<!--
-[P,I] = max(o.pSpotCell, [], 2) - put cell assignment to I
-o.CellYX - cell centers
-But these are subset of CA1 section (right and left correspondingly).
-Spots, stored in left and right files are identical and global for all section.
- -->
-
 Afterwards, to obtain segmentation from the DAPI, we ran Watershed segmentation using ImageJ:
 
 1. Open DAPI_3-3.jpg image
@@ -57,7 +50,7 @@ wget -P data http://pklab.med.harvard.edu/viktor/baysor/iss/pciSeq_3-3.csv
 ### Without prior segmentation
 
 ```bash
-baysor run --iters 500 --plot -c ../../configs/iss.toml -o ./output_no_dapi ./data/pciSeq_3-3.csv
+baysor run --iters 500 --scale 6.5 --plot -c ../../configs/iss.toml -o ./output_no_dapi ./data/pciSeq_3-3.csv
 ```
 
 ### With DAPI segmentation mask

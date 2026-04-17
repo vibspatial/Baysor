@@ -1,57 +1,54 @@
-[![](https://img.shields.io/badge/docs-dev-blue.svg)](https://kharchenkolab.github.io/Baysor/dev)
-
 # Baysor
 
 **Bay**esian **s**egmentation **o**f imaging-based spatial t**r**anscriptomics data
 
-- [News (\[0.7.0\] — 2024-09-13)](#news-070--2024-09-13)
-- [Overview](#overview)
-- [Usage](#usage)
-- [Installation](#installation)
-  - [Binary download](#binary-download)
-  - [Install as a Julia package](#install-as-a-julia-package)
-- [Citation](#citation)
-
-## News ([0.7.0] — 2024-09-13)
-
-**Warning:** the current version isn't compatible with Julia 1.11. See how to set up Julia 1.10 [here](https://kharchenkolab.github.io/Baysor/dev/installation/).
-
-- Improved integration with 10x Xenium
-- Better parallelism
-- Optimized speed
-- Improved NCV coloring
-- Reworked polygon outputs
-
-*See the [changelog](CHANGELOG.md) for more detalis.*
-
 ## Overview
 
-Baysor is a tool for performing cell segmentation on imaging-based spatial transcriptomics data. It optimizes segmentation considering the likelihood of transcriptional composition, size and shape of the cell. The approach can take into account nuclear or cytoplasm staining, however, can also perform segmentation based on the detected molecules alone. The details of the method are described in the [paper](https://www.nature.com/articles/s41587-021-01044-w), or [pre-print](https://www.biorxiv.org/content/10.1101/2020.10.05.326777v1) (old version of the text). To reproduce the analysis from the paper see [BaysorAnalysis](https://github.com/kharchenkolab/BaysorAnalysis) repo.
+Baysor segments imaging-based spatial transcriptomics data using spatial position, local gene composition, and optional prior segmentation masks. This branch contains the native C++ implementation and is built with CMake.
 
 ## Usage
 
-See [the documentation](https://kharchenkolab.github.io/Baysor/) for usage instructions.
-
-## Installation
-
-*For more details and alternative ways of installation see [the documentation](https://kharchenkolab.github.io/Baysor/)*
-
-### Binary download
-
-The easiest way to install Baysor on Linux is to download a binary from the [release section](https://github.com/kharchenkolab/Baysor/releases) (see *Assets*). There, you can use *bin/baysor* executable. For other platforms, "Install as a Julia package" is a recommended way.
-
-### Install as a Julia package
-
-[Install Julia](https://github.com/julialang/juliaup#installation):
+The main CLI entrypoint is:
 
 ```bash
-curl -fsSL https://install.julialang.org | sh
+./build/baysor run --help
 ```
 
-Install Baysor:
+Example datasets and runnable commands live under:
+
+- `examples/iss`
+- `examples/osm-FISH`
+- `examples/STARmap`
+
+## Build
+
+### Dependencies
+
+Install a C++17 toolchain plus the libraries required by `find_package()` in [CMakeLists.txt](CMakeLists.txt):
+
+- Eigen3
+- OpenMP
+- spdlog
+- CGAL
+- Arrow / Parquet
+- HDF5
+- nlohmann_json
+- libtiff
+- GTest for the test target
+
+Several header-only dependencies are fetched automatically by CMake.
+
+### Configure and build
 
 ```bash
-julia -e 'using Pkg; Pkg.add(PackageSpec(url="https://github.com/kharchenkolab/Baysor.git")); Pkg.build()'
+cmake -S . -B build
+cmake --build build
+```
+
+### Run tests
+
+```bash
+ctest --test-dir build --output-on-failure
 ```
 
 ## Citation
