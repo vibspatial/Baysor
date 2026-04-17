@@ -98,6 +98,18 @@ end
             @test all(Utils.isnoise.([0, 1, 2, 1]) .== [true, false, false, false])
             @test all(Utils.isnoise.(["", "0", "2", "1"]) .== [true, false, false, false])
         end
+
+        @testset "ncv_colors" begin
+            pca = randn(10, 50)
+
+            emb = BPR.gene_composition_color_embedding(pca, fill(0.92, 50); sample_size=30, seed=1)
+            @test size(emb) == (3, 50)
+            @test length(unique(eachcol(emb))) > 1
+
+            emb_fallback = BPR.gene_composition_color_embedding(pca, fill(0.20, 50); sample_size=30, seed=1)
+            @test size(emb_fallback) == (3, 50)
+            @test all(emb_fallback[:, i] == [50.0, 0.0, 0.0] for i in axes(emb_fallback, 2))
+        end
     end
 
     @testset "distributions" begin
