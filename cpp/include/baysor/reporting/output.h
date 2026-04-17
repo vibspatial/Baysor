@@ -68,4 +68,10 @@ void save_polygons_geojson(const PolygonCollection& polygons,
                            const std::string& path,
                            const std::string& format = "FeatureCollection");
 
+/// Save a 3D polygon stack as Julia-style split outputs:
+/// 2D polygons go to polygons_2d, per-z polygons go to polygons_3d.
+void save_polygon_stack_geojson(const PolygonStack& polygons,
+                                const OutputPaths& out_paths,
+                                const std::string& format = "FeatureCollection");
+
 } // namespace baysor

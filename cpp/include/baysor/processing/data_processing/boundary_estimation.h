@@ -9,6 +9,7 @@ namespace baysor {
 
 /// Polygon collection: cell name/ID -> Nx2 matrix of boundary vertices
 using PolygonCollection = std::unordered_map<std::string, Eigen::MatrixXd>;
+using PolygonStack = std::vector<std::pair<std::string, PolygonCollection>>;
 
 /// Estimate boundary polygons for all cells from molecule positions and assignments
 PolygonCollection boundary_polygons(
@@ -25,7 +26,7 @@ std::vector<Eigen::MatrixXd> boundary_polygons_from_grid(
 );
 
 /// Auto boundary estimation with optional per-z-slice polygons for 3D data
-std::pair<PolygonCollection, PolygonCollection> boundary_polygons_auto(
+std::pair<PolygonCollection, PolygonStack> boundary_polygons_auto(
     const Eigen::MatrixXd& pos_data,
     const std::vector<int>& assignment,
     bool estimate_per_z = false,

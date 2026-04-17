@@ -6,6 +6,7 @@
 #include "baysor/utils/options.h"
 #include "baysor/processing/utils/utils.h"
 #include "baysor/processing/data_processing/triangulation.h"
+#include "baysor/processing/data_processing/boundary_estimation.h"
 #include "baysor/processing/data_processing/initialization.h"
 #include "baysor/processing/data_processing/noise_estimation.h"
 #include "baysor/processing/data_processing/neighborhood_composition.h"
@@ -17,6 +18,7 @@
 #include "baysor/processing/distributions/mv_normal.h"
 #include "baysor/processing/distributions/categorical_smoothed.h"
 #include "baysor/reporting/color_utils.h"
+#include "baysor/reporting/output.h"
 
 #include <Eigen/Dense>
 #include <cmath>
@@ -1146,6 +1148,29 @@ TEST(KNN, 3D) {
     EXPECT_NEAR(result.distances[1][1], 5.0, 1e-10);
 }
 
+TEST(KNN, 3DTieOrderIsDeterministic) {
+    Eigen::MatrixXd pts(3, 4);
+    pts.col(0) << 0.0, 0.0, 0.0;
+    pts.col(1) << 1.0, 0.0, 0.0;
+    pts.col(2) << -1.0, 0.0, 0.0;
+    pts.col(3) << 0.0, 1.0, 0.0;
+
+    Eigen::MatrixXd query(3, 1);
+    query.col(0) = pts.col(0);
+
+    auto result = baysor::knn_parallel(pts, query, 4, true);
+
+    ASSERT_EQ(result.indices.size(), 1u);
+    ASSERT_EQ(result.indices[0].size(), 4u);
+    EXPECT_EQ(result.indices[0][0], 0);
+    EXPECT_EQ(result.indices[0][1], 1);
+    EXPECT_EQ(result.indices[0][2], 2);
+    EXPECT_EQ(result.indices[0][3], 3);
+    EXPECT_NEAR(result.distances[0][1], 1.0, 1e-10);
+    EXPECT_NEAR(result.distances[0][2], 1.0, 1e-10);
+    EXPECT_NEAR(result.distances[0][3], 1.0, 1e-10);
+}
+
 // ============================================================================
 // count_array_sparse
 // ============================================================================
@@ -1230,6 +1255,86 @@ TEST(Triangulation, AdjacencyList3DKNN) {
     auto result = baysor::adjacency_list(pts, /*filter=*/false);
 
     EXPECT_GT(static_cast<int>(result.edge_src.size()), 0);
+}
+
+// ============================================================================
+// Boundary estimation
+// ============================================================================
+
+TEST(BoundaryEstimation, BoundaryPolygonsAuto3DPerZ) {
+    Eigen::MatrixXd pos(3, 8);
+    pos.col(0) << 0.0, 0.0, 0.0;
+    pos.col(1) << 2.0, 0.0, 0.0;
+    pos.col(2) << 2.0, 2.0, 0.0;
+    pos.col(3) << 0.0, 2.0, 0.0;
+    pos.col(4) << 10.0, 10.0, 1.0;
+    pos.col(5) << 12.0, 10.0, 1.0;
+    pos.col(6) << 12.0, 12.0, 1.0;
+    pos.col(7) << 10.0, 12.0, 1.0;
+
+    std::vector<int> assignment = {1, 1, 1, 1, 2, 2, 2, 2};
+    std::vector<std::string> cell_names = {"cell_1", "cell_2"};
+
+    auto [joined, stack] = baysor::boundary_polygons_auto(
+        pos, assignment, /*estimate_per_z=*/true, &cell_names, /*verbose=*/false);
+
+    ASSERT_EQ(joined.size(), 2u);
+    EXPECT_GT(joined.at("cell_1").cols(), 0);
+    EXPECT_GT(joined.at("cell_2").cols(), 0);
+
+    ASSERT_GE(stack.size(), 3u);
+    EXPECT_EQ(stack[0].first, "2d");
+
+    bool saw_z0 = false;
+    bool saw_z1 = false;
+    for (const auto& [layer, polys] : stack) {
+        if (layer == "0") {
+            saw_z0 = true;
+            ASSERT_EQ(polys.size(), 1u);
+            EXPECT_TRUE(polys.count("cell_1"));
+        } else if (layer == "1") {
+            saw_z1 = true;
+            ASSERT_EQ(polys.size(), 1u);
+            EXPECT_TRUE(polys.count("cell_2"));
+        }
+    }
+    EXPECT_TRUE(saw_z0);
+    EXPECT_TRUE(saw_z1);
+}
+
+TEST(BoundaryEstimation, BoundaryPolygonsFromGridKeepsTouchingLabelsSeparate) {
+    Eigen::Matrix<uint32_t, Eigen::Dynamic, Eigen::Dynamic> grid(3, 4);
+    grid <<
+        1, 1, 2, 2,
+        1, 1, 2, 2,
+        0, 0, 0, 0;
+
+    auto polys = baysor::boundary_polygons_from_grid(grid);
+
+    ASSERT_GE(polys.size(), 2u);
+    EXPECT_GT(polys[0].cols(), 0);
+    EXPECT_GT(polys[1].cols(), 0);
+}
+
+TEST(Output, SavePolygonsGeoJsonKeepsTriangleFeature) {
+    baysor::PolygonCollection polygons;
+    Eigen::MatrixXd tri(2, 3);
+    tri <<
+        0.0, 1.0, 0.0,
+        0.0, 0.0, 1.0;
+    polygons["cell_1"] = tri;
+
+    const std::string path = write_temp_csv("", ".json");
+    baysor::save_polygons_geojson(polygons, path, "FeatureCollection");
+
+    std::ifstream f(path);
+    ASSERT_TRUE(f.good());
+    std::stringstream buf;
+    buf << f.rdbuf();
+    const std::string s = buf.str();
+
+    EXPECT_NE(s.find("\"type\":\"FeatureCollection\""), std::string::npos);
+    EXPECT_NE(s.find("\"id\":\"cell_1\""), std::string::npos);
 }
 
 // ============================================================================
@@ -1679,6 +1784,50 @@ TEST(ColorUtils, GeneCompositionColorEmbedding) {
         EXPECT_EQ(c.size(), 7u);
         EXPECT_EQ(c[0], '#');
     }
+}
+
+TEST(ColorUtils, GeneCompositionColorEmbeddingFallsBackWithoutHighConfidenceAnchors) {
+    Eigen::MatrixXf mol_vecs(10, 8);
+    std::mt19937 rng(7);
+    std::normal_distribution<double> dist(0.0, 1.0);
+    for (int i = 0; i < mol_vecs.rows(); ++i) {
+        for (int j = 0; j < mol_vecs.cols(); ++j) {
+            mol_vecs(i, j) = static_cast<float>(dist(rng));
+        }
+    }
+
+    std::vector<double> confidence(mol_vecs.cols(), 0.20);
+    auto colors = baysor::gene_composition_color_embedding(mol_vecs, confidence, 30);
+
+    ASSERT_EQ(colors.size(), static_cast<size_t>(mol_vecs.cols()));
+    for (const auto& c : colors) {
+        EXPECT_EQ(c, "#808080");
+    }
+}
+
+TEST(ColorUtils, GeneCompositionColorEmbeddingLowersThresholdWhenNeeded) {
+    Eigen::MatrixXf mol_vecs(10, 50);
+    std::mt19937 rng(11);
+    std::normal_distribution<double> dist(0.0, 1.0);
+    for (int i = 0; i < mol_vecs.rows(); ++i) {
+        for (int j = 0; j < mol_vecs.cols(); ++j) {
+            mol_vecs(i, j) = static_cast<float>(dist(rng));
+        }
+    }
+
+    // No molecule reaches the historical 0.95 cutoff, but all molecules qualify
+    // once the adaptive ladder relaxes to 0.90.
+    std::vector<double> confidence(mol_vecs.cols(), 0.92);
+    auto colors = baysor::gene_composition_color_embedding(mol_vecs, confidence, 30);
+
+    ASSERT_EQ(colors.size(), static_cast<size_t>(mol_vecs.cols()));
+    bool saw_non_fallback = false;
+    for (const auto& c : colors) {
+        EXPECT_EQ(c.size(), 7u);
+        EXPECT_EQ(c[0], '#');
+        if (c != "#808080") saw_non_fallback = true;
+    }
+    EXPECT_TRUE(saw_non_fallback);
 }
 
 // ============================================================================

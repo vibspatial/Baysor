@@ -2,13 +2,72 @@
 #include "baysor/data_loading/data.h"
 
 #include <hdf5.h>
+#include <nlohmann/json.hpp>
 
 #include <cstdio>
+#include <cmath>
 #include <fstream>
 #include <stdexcept>
 #include <string>
 
 namespace baysor {
+
+static nlohmann::json polygons_to_geojson_json(
+    const PolygonCollection& polygons,
+    const std::string& format
+) {
+    nlohmann::json out;
+
+    const bool is_feature = (format != "GeometryCollection");
+    if (is_feature) {
+        out["type"] = "FeatureCollection";
+        out["features"] = nlohmann::json::array();
+    } else {
+        out["type"] = "GeometryCollection";
+        out["geometries"] = nlohmann::json::array();
+    }
+
+    for (const auto& [cell_name, poly] : polygons) {
+        const int nv = (poly.cols() > 0) ? static_cast<int>(poly.cols()) : 0;
+        if (is_feature && nv < 3) {
+            continue;
+        }
+
+        nlohmann::json ring = nlohmann::json::array();
+        for (int j = 0; j < nv; ++j) {
+            ring.push_back({poly(0, j), poly(1, j)});
+        }
+        if (nv > 0) {
+            const bool already_closed =
+                (std::abs(poly(0, nv - 1) - poly(0, 0)) < 1e-9) &&
+                (std::abs(poly(1, nv - 1) - poly(1, 0)) < 1e-9);
+            if (!already_closed) {
+                ring.push_back({poly(0, 0), poly(1, 0)});
+            }
+        }
+
+        nlohmann::json geom = {
+            {"type", "Polygon"},
+            {"coordinates", nlohmann::json::array({ring})}
+        };
+
+        if (is_feature) {
+            out["features"].push_back({
+                {"type", "Feature"},
+                {"id", cell_name},
+                {"geometry", geom}
+            });
+        } else {
+            out["geometries"].push_back({
+                {"type", "Polygon"},
+                {"coordinates", nlohmann::json::array({ring})},
+                {"cell", cell_name}
+            });
+        }
+    }
+
+    return out;
+}
 
 // ============================================================================
 // save_matrix_to_loom  —  C API implementation (avoids C++ ABI issues)
@@ -324,54 +383,31 @@ void save_polygons_geojson(const PolygonCollection& polygons,
 
     std::ofstream f(path);
     if (!f) throw std::runtime_error("save_polygons_geojson: cannot open " + path);
+    f << polygons_to_geojson_json(polygons, format).dump();
+}
 
-    // Determine wrapper type (FeatureCollection or GeometryCollection)
-    bool is_feature = (format != "GeometryCollection");
+void save_polygon_stack_geojson(const PolygonStack& polygons,
+                                const OutputPaths& out_paths,
+                                const std::string& format) {
+    if (format == "none" || polygons.empty()) return;
 
-    if (is_feature) {
-        f << "{\"type\":\"FeatureCollection\",\"features\":[\n";
-    } else {
-        f << "{\"type\":\"GeometryCollection\",\"geometries\":[\n";
-    }
+    nlohmann::json by_layer = nlohmann::json::object();
+    bool has_3d = false;
 
-    bool first = true;
-    for (const auto& [cell_name, hull] : polygons) {
-        if (!first) f << ",\n";
-        first = false;
-
-        // Hull is 2×n (row 0 = x, row 1 = y); may be empty for tiny cells
-        int nv = (hull.cols() > 0) ? static_cast<int>(hull.cols()) : 0;
-
-        // Build coordinate ring (GeoJSON rings must be closed: first == last)
-        std::string coords = "[[";
-        if (nv > 0) {
-            for (int j = 0; j < nv; ++j) {
-                if (j > 0) coords += ",";
-                coords += "[" + std::to_string(hull(0, j)) + ","
-                              + std::to_string(hull(1, j)) + "]";
-            }
-            // Close the ring by repeating the first vertex
-            coords += ",[" + std::to_string(hull(0, 0)) + ","
-                           + std::to_string(hull(1, 0)) + "]";
+    for (const auto& [layer_name, poly] : polygons) {
+        if (layer_name == "2d") {
+            save_polygons_geojson(poly, out_paths.polygons_2d, format);
+            continue;
         }
-        coords += "]]";
-
-        std::string geom = "{\"type\":\"Polygon\",\"coordinates\":" + coords + "}";
-
-        if (is_feature) {
-            f << "{\"type\":\"Feature\","
-              << "\"geometry\":" << geom << ","
-              << "\"properties\":{\"cell\":\"" << cell_name << "\"}}";
-        } else {
-            f << geom;
-        }
+        by_layer[layer_name] = polygons_to_geojson_json(poly, format);
+        has_3d = true;
     }
 
-    if (is_feature) {
-        f << "\n]}";
-    } else {
-        f << "\n]}";
-    }
+    if (!has_3d) return;
+
+    std::ofstream f(out_paths.polygons_3d);
+    if (!f) throw std::runtime_error("save_polygon_stack_geojson: cannot open " + out_paths.polygons_3d);
+    f << by_layer.dump();
 }
 
 } // namespace baysor

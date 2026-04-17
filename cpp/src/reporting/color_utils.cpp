@@ -4,8 +4,10 @@
 #include "baysor/processing/utils/utils.h"
 
 #include <Eigen/SVD>
+#include <spdlog/spdlog.h>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <numeric>
 #include <random>
@@ -13,6 +15,8 @@
 #include <omp.h>
 
 namespace baysor {
+
+static constexpr const char* NCV_FALLBACK_COLOR = "#808080";
 
 // ============================================================================
 // Quantile helper (for internal use)
@@ -180,15 +184,49 @@ std::vector<std::string> gene_composition_color_embedding(
     // to get a spread measure, then pick evenly-spaced indices from the sorted order.
     sample_size = std::min(sample_size, n_mols);
 
+    const int min_anchor_count = std::min(sample_size, n_mols);
+    const std::array<double, 8> threshold_ladder = {0.95, 0.90, 0.85, 0.80, 0.75, 0.70, 0.60, 0.50};
+
     std::vector<int> high_conf_ids;
-    high_conf_ids.reserve(n_mols);
-    for (int i = 0; i < n_mols; ++i) {
-        if (confidence[i] >= 0.95) high_conf_ids.push_back(i);
+    double chosen_threshold = threshold_ladder.front();
+    for (double thr : threshold_ladder) {
+        high_conf_ids.clear();
+        high_conf_ids.reserve(n_mols);
+        for (int i = 0; i < n_mols; ++i) {
+            if (confidence[i] >= thr) high_conf_ids.push_back(i);
+        }
+        chosen_threshold = thr;
+        if (static_cast<int>(high_conf_ids.size()) >= min_anchor_count) {
+            break;
+        }
     }
-    // Julia fallback: use only high_conf_ids (not all molecules) when count < sample_size
+
+    // Julia fallback uses only anchor molecules rather than all molecules when
+    // the requested sample size exceeds the selected anchor pool.
     if (static_cast<int>(high_conf_ids.size()) < sample_size) {
         sample_size = static_cast<int>(high_conf_ids.size());
     }
+
+    // Large runs can legitimately have no molecules above the hard 0.95
+    // confidence cutoff historically used for NCV-color anchor selection. In that case
+    // segmentation is still valid, but the UMAP fit/interpolation path below
+    // would hit divisions by (sample_size - 1) and invalid KNN sizes.
+    if (sample_size <= 1) {
+        spdlog::warn(
+            "NCV color embedding fallback: insufficient anchor molecules after adaptive thresholding "
+            "(max_conf={:.4f}, threshold={:.2f}, anchors={}, sample_size={}).",
+            confidence.empty() ? 0.0 : *std::max_element(confidence.begin(), confidence.end()),
+            chosen_threshold,
+            high_conf_ids.size(),
+            sample_size
+        );
+        return std::vector<std::string>(n_mols, NCV_FALLBACK_COLOR);
+    }
+
+    spdlog::info(
+        "NCV color embedding: selected {} anchors with confidence >= {:.2f}; sampling {} for UMAP fit.",
+        high_conf_ids.size(), chosen_threshold, sample_size
+    );
 
     // Sort by sum of all component dimensions — matches Julia's sum(vals, dims=2).
     // Precompute sums to avoid recomputing them O(N log N) times in the comparator.

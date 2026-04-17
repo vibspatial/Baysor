@@ -1,8 +1,9 @@
 #include "baysor/processing/utils/utils.h"
 #include <third_party/nanoflann.hpp>
 #include <algorithm>
-#include <numeric>
 #include <cmath>
+#include <numeric>
+#include <vector>
 #include <omp.h>
 
 namespace baysor {
@@ -114,13 +115,13 @@ KnnResult knn_parallel(
     // Clamp k to available points
     k = std::min(k, n_tree);
 
-    // Build KD-tree
-    EigenColMajorAdaptor adaptor(tree_points);
-    KDTree tree(n_dims, adaptor, nanoflann::KDTreeSingleIndexAdaptorParams(/* max_leaf = */ 10));
-
     KnnResult result;
     result.indices.resize(n_query);
     result.distances.resize(n_query);
+
+    // Build KD-tree
+    EigenColMajorAdaptor adaptor(tree_points);
+    KDTree tree(n_dims, adaptor, nanoflann::KDTreeSingleIndexAdaptorParams(/* max_leaf = */ 10));
 
     #pragma omp parallel for schedule(dynamic, 256)
     for (int i = 0; i < n_query; ++i) {
@@ -129,11 +130,37 @@ KnnResult knn_parallel(
 
         nanoflann::KNNResultSet<double, int> resultSet(k);
         resultSet.init(result.indices[i].data(), result.distances[i].data());
-        tree.findNeighbors(resultSet, query_points.col(i).data());
+        tree.findNeighbors(
+            resultSet,
+            query_points.col(i).data(),
+            nanoflann::SearchParameters(/*eps=*/0.0f, /*sorted=*/sorted)
+        );
 
-        // nanoflann returns squared distances — convert to actual distances
-        for (int j = 0; j < k; ++j) {
-            result.distances[i][j] = std::sqrt(result.distances[i][j]);
+        // Keep sorted=true deterministic even when the backend does not define
+        // a stable tie order for equal-distance neighbors.
+        if (sorted) {
+            std::vector<int> order(k);
+            std::iota(order.begin(), order.end(), 0);
+            std::stable_sort(order.begin(), order.end(), [&](int a, int b) {
+                if (result.distances[i][a] != result.distances[i][b]) {
+                    return result.distances[i][a] < result.distances[i][b];
+                }
+                return result.indices[i][a] < result.indices[i][b];
+            });
+
+            std::vector<int> sorted_indices(k);
+            std::vector<double> sorted_distances(k);
+            for (int j = 0; j < k; ++j) {
+                sorted_indices[j] = result.indices[i][order[j]];
+                sorted_distances[j] = result.distances[i][order[j]];
+            }
+            result.indices[i].swap(sorted_indices);
+            result.distances[i].swap(sorted_distances);
+        }
+
+        // nanoflann returns squared distances; convert to actual distances.
+        for (double& d : result.distances[i]) {
+            d = std::sqrt(d);
         }
     }
 

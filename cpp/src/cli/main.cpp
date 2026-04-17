@@ -312,28 +312,23 @@ int cmd_run(
             save_cell_stat_df(stats, cell_names, col_names, out_paths.cell_stats);
         }
 
-        // Save cell polygon hulls as GeoJSON
+        // Save cell polygons as GeoJSON
         if (polygon_format != "none") {
             spdlog::info("Saving cell polygons...");
-            auto ids_by_cell_poly = split_ids(bm_data.assignment, n_cells_final, true);
-            PolygonCollection polygons;
-            polygons.reserve(n_cells_final);
+            std::vector<std::string> cell_names(n_cells_final);
             for (int ci = 0; ci < n_cells_final; ++ci) {
-                const auto& ids = ids_by_cell_poly[ci];
-                int np = static_cast<int>(ids.size());
-                std::string cname = "cell_" + std::to_string(ci + 1);
-                if (np >= 3) {
-                    Eigen::MatrixXd pos2d(2, np);
-                    for (int j = 0; j < np; ++j) {
-                        pos2d(0, j) = data.x[ids[j]];
-                        pos2d(1, j) = data.y[ids[j]];
-                    }
-                    polygons[cname] = convex_hull(pos2d);
-                } else {
-                    polygons[cname] = Eigen::MatrixXd(2, 0);
-                }
+                cell_names[ci] = "cell_" + std::to_string(ci + 1);
             }
-            save_polygons_geojson(polygons, out_paths.polygons_2d, polygon_format);
+
+            auto pos = data.position_matrix();
+            auto [poly_joined, poly_stack] = boundary_polygons_auto(
+                pos, bm_data.assignment, /*estimate_per_z=*/(N == 3), &cell_names, /*verbose=*/true);
+
+            if (N == 3) {
+                save_polygon_stack_geojson(poly_stack, out_paths, polygon_format);
+            } else {
+                save_polygons_geojson(poly_joined, out_paths.polygons_2d, polygon_format);
+            }
         }
 
         // Save count matrix
