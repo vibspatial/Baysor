@@ -963,6 +963,48 @@ TEST(PriorSegmentation, BinaryMaskScaleUsesFilteredComponentsOnly) {
     std::remove(csv_path.c_str());
 }
 
+TEST(PriorSegmentation, LabeledMaskPreservesTouchingLabelsAndUsesLabelAreas) {
+    const uint32_t width = 9, height = 2;
+    std::vector<uint8_t> pixels(width * height, 0);
+    for (uint32_t row = 0; row < height; ++row) {
+        for (uint32_t col = 0; col < 3; ++col) {
+            pixels[static_cast<size_t>(row) * width + col] = 1;
+            pixels[static_cast<size_t>(row) * width + col + 3] = 2;
+            pixels[static_cast<size_t>(row) * width + col + 6] = 3;
+        }
+    }
+
+    auto mask_path = write_temp_tiff_mask_u8(pixels, width, height);
+    auto csv_path = write_temp_csv(
+        "x,y,gene\n"
+        "1,1,A\n"
+        "2,2,A\n"
+        "4,1,A\n"
+        "5,2,A\n"
+        "7,1,A\n"
+        "8,2,A\n"
+    );
+
+    baysor::DataOptions opts;
+    opts.min_molecules_per_cell = 2;
+    baysor::fill_and_check_data_options(opts);
+    auto data = baysor::load_molecules(csv_path, opts);
+
+    auto [scale, scale_std] = baysor::load_prior_segmentation(
+        data, mask_path, csv_path, "0", /*min_molecules_per_segment=*/2,
+        /*min_molecules_per_cell=*/2, /*estimate_scale=*/true);
+
+    const std::vector<int> expected_labels = {1, 1, 2, 2, 3, 3};
+    EXPECT_EQ(data.prior_segmentation, expected_labels);
+
+    const double expected_radius = std::sqrt(6.0 / M_PI);
+    EXPECT_NEAR(scale, expected_radius, 1e-6);
+    EXPECT_NEAR(scale_std, 0.0, 1e-6);
+
+    std::remove(mask_path.c_str());
+    std::remove(csv_path.c_str());
+}
+
 // ============================================================================
 // Options
 // ============================================================================
