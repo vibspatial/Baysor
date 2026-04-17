@@ -4,7 +4,9 @@
 
 ## Overview
 
-Baysor segments imaging-based spatial transcriptomics data using spatial position, local gene composition, and optional prior segmentation masks. This branch contains the native C++ implementation and is built with CMake.
+Baysor segments imaging-based spatial transcriptomics data using spatial position, local gene composition, and optional prior segmentation masks.
+
+This `cpp` branch is a native C++ port of the main Baysor implementation on [`master`](https://github.com/kharchenkolab/Baysor/tree/master). It is built with CMake.
 
 ## Usage
 
@@ -14,11 +16,11 @@ The main CLI entrypoint is:
 ./build/baysor run --help
 ```
 
-Example datasets and runnable commands live under:
+Example datasets and runnable commands:
 
-- `examples/iss`
-- `examples/osm-FISH`
-- `examples/STARmap`
+- [ISS](examples/iss/README.md)
+- [osm-FISH](examples/osm-FISH/README.md)
+- [STARmap](examples/STARmap/README.md)
 
 ## Build
 
