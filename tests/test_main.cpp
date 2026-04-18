@@ -2359,12 +2359,17 @@ TEST(RunReport, GeneratesSegmentationHtml) {
     std::vector<int> mol_clusters = {1, 1, 2, 2};
 
     baysor::PolygonCollection polygons;
-    Eigen::MatrixXd poly(4, 2);
-    poly << 0.0, 0.0,
-            2.0, 0.0,
-            2.0, 1.5,
-            0.0, 1.5;
-    polygons["cell_1"] = poly;
+    Eigen::MatrixXd poly_2xN(2, 4);
+    poly_2xN << 0.0, 2.0, 2.0, 0.0,
+                0.0, 0.0, 1.5, 1.5;
+    polygons["cell_1"] = poly_2xN;
+
+    Eigen::MatrixXd poly_Nx2(4, 2);
+    poly_Nx2 << 0.5, 0.2,
+                1.0, 0.2,
+                1.0, 0.8,
+                0.5, 0.8;
+    polygons["cell_2"] = poly_Nx2;
 
     auto html = baysor::generate_run_segmentation_html(
         data, assignment, ncv_color, &mol_clusters, &polygons);

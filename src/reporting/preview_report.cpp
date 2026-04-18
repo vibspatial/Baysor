@@ -180,12 +180,27 @@ static void overlay_polygons(
     const PolygonCollection& polygons
 ) {
     for (const auto& [_, poly] : polygons) {
-        if (poly.rows() < 2 || poly.cols() < 2) continue;
-        for (int i = 0; i < poly.rows(); ++i) {
-            int j = (i + 1) % poly.rows();
-            auto [x0, y0] = map_to_pixel(poly(i, 0), poly(i, 1), vp);
-            auto [x1, y1] = map_to_pixel(poly(j, 0), poly(j, 1), vp);
-            draw_line(pixels, vp.width_px, vp.height_px, x0, y0, x1, y1, 0, 0, 0);
+        int n_vertices = 0;
+        bool cols_are_vertices = false;
+        if (poly.rows() == 2 && poly.cols() >= 2) {
+            n_vertices = static_cast<int>(poly.cols());
+            cols_are_vertices = true;
+        } else if (poly.cols() == 2 && poly.rows() >= 2) {
+            n_vertices = static_cast<int>(poly.rows());
+            cols_are_vertices = false;
+        } else {
+            continue;
+        }
+
+        for (int i = 0; i < n_vertices; ++i) {
+            int j = (i + 1) % n_vertices;
+            double x0 = cols_are_vertices ? poly(0, i) : poly(i, 0);
+            double y0 = cols_are_vertices ? poly(1, i) : poly(i, 1);
+            double x1 = cols_are_vertices ? poly(0, j) : poly(j, 0);
+            double y1 = cols_are_vertices ? poly(1, j) : poly(j, 1);
+            auto [px0, py0] = map_to_pixel(x0, y0, vp);
+            auto [px1, py1] = map_to_pixel(x1, y1, vp);
+            draw_line(pixels, vp.width_px, vp.height_px, px0, py0, px1, py1, 0, 0, 0);
         }
     }
 }
