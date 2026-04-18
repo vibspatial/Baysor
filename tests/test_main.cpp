@@ -21,6 +21,7 @@
 #include "baysor/processing/distributions/categorical_smoothed.h"
 #include "baysor/reporting/color_utils.h"
 #include "baysor/reporting/output.h"
+#include "baysor/reporting/run_report.h"
 
 #include <Eigen/Dense>
 #include <cmath>
@@ -2287,4 +2288,78 @@ TEST(BmmLoop, PositiveToleranceStopsBeforeConfiguredIterations) {
     EXPECT_LT(early_stop.assignment_history.size(), static_cast<size_t>(n_iters));
     EXPECT_LT(early_stop.n_components_trace.size(), static_cast<size_t>(n_iters + 1));
     EXPECT_EQ(early_stop.assignment, fixed_iters.assignment);
+}
+
+TEST(RunReport, GeneratesDiagnosticHtml) {
+    baysor::MoleculeData data;
+    data.x = {0.0, 1.0, 2.0, 3.0};
+    data.y = {0.0, 0.0, 1.0, 1.0};
+    data.gene = {1, 1, 1, 1};
+    data.gene_names = {"GeneA"};
+    data.confidence = {0.95, 0.85, 0.25, 0.10};
+    data.prior_segmentation = {1, 1, 0, 2};
+
+    std::vector<double> edge_lengths = {0.1, 0.12, 1.0, 1.2};
+    baysor::NoiseFitResult noise_result;
+    noise_result.assignment_probs = Eigen::MatrixXd::Zero(4, 2);
+    noise_result.assignment = {1, 1, 2, 2};
+    noise_result.signal_mu = 0.11;
+    noise_result.signal_sigma = 0.02;
+    noise_result.noise_mu = 1.1;
+    noise_result.noise_sigma = 0.1;
+
+    std::vector<int> assignment = {1, 1, 0, 2};
+    std::vector<std::unordered_map<int, int>> trace = {
+        {{1, 2}, {2, 1}},
+        {{1, 2}, {2, 2}},
+        {{1, 2}, {2, 2}}
+    };
+    std::vector<double> assignment_conf = {1.0, 1.0, 0.0, 1.0};
+
+    Eigen::MatrixXd cell_stats(2, 5);
+    cell_stats <<
+        0.5, 0.0, 2.0, 2.0, 1.1,
+        3.0, 1.0, 2.5, 1.2, 1.3;
+    std::vector<std::string> cell_cols = {"x", "y", "area", "density", "elongation"};
+
+    baysor::PriorInputOptions prior;
+    prior.type = baysor::PriorInputType::Column;
+    prior.column_name = "cell_id";
+
+    auto html = baysor::generate_run_diagnostic_html(
+        data, edge_lengths, noise_result, 10, assignment, trace, assignment_conf,
+        nullptr, cell_stats, cell_cols, prior, 4.5, "1.2");
+
+    EXPECT_NE(html.find("Baysor Run Report"), std::string::npos);
+    EXPECT_NE(html.find("Segmentation convergence"), std::string::npos);
+    EXPECT_NE(html.find("Molecule confidence"), std::string::npos);
+    EXPECT_NE(html.find("Prior column: cell_id"), std::string::npos);
+}
+
+TEST(RunReport, GeneratesSegmentationHtml) {
+    baysor::MoleculeData data;
+    data.x = {0.0, 1.0, 2.0, 3.0};
+    data.y = {0.0, 0.0, 1.0, 1.0};
+    data.gene = {1, 1, 1, 1};
+    data.gene_names = {"GeneA"};
+
+    std::vector<int> assignment = {1, 1, 0, 2};
+    std::vector<std::string> ncv_color = {"#ff0000", "#00ff00", "#0000ff", "#ff00ff"};
+    std::vector<int> mol_clusters = {1, 1, 2, 2};
+
+    baysor::PolygonCollection polygons;
+    Eigen::MatrixXd poly(4, 2);
+    poly << 0.0, 0.0,
+            2.0, 0.0,
+            2.0, 1.5,
+            0.0, 1.5;
+    polygons["cell_1"] = poly;
+
+    auto html = baysor::generate_run_segmentation_html(
+        data, assignment, ncv_color, &mol_clusters, &polygons);
+
+    EXPECT_NE(html.find("Final cell assignment"), std::string::npos);
+    EXPECT_NE(html.find("Local expression similarity (NCV)"), std::string::npos);
+    EXPECT_NE(html.find("Molecule clustering"), std::string::npos);
+    EXPECT_NE(html.find("data:image/png;base64,"), std::string::npos);
 }

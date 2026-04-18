@@ -263,9 +263,11 @@ NoiseFitResult fit_noise_probabilities(
 // append_confidence
 // ============================================================================
 
-void append_confidence(MoleculeData& data, int nn_id, double prior_confidence) {
+ConfidenceEstimationDetails estimate_confidence_details(
+    const MoleculeData& data, int nn_id, double prior_confidence
+) {
     int n = data.n_molecules();
-    if (n == 0) return;
+    if (n == 0) return {};
 
     // Default nn_id
     if (nn_id <= 0) {
@@ -302,14 +304,23 @@ void append_confidence(MoleculeData& data, int nn_id, double prior_confidence) {
     auto result = fit_noise_probabilities(mean_dists, adj_list, min_conf_ptr,
                                           /*max_iters=*/10000, /*tol=*/0.005, /*verbose=*/true);
 
-    // Store confidence (signal probability)
-    data.confidence.resize(n);
-    for (int i = 0; i < n; ++i) {
-        data.confidence[i] = result.assignment_probs(i, 0);
-    }
-
     spdlog::info("Noise estimation: signal mu={:.4g}, sigma={:.4g}; noise mu={:.4g}, sigma={:.4g}",
                  result.signal_mu, result.signal_sigma, result.noise_mu, result.noise_sigma);
+
+    ConfidenceEstimationDetails details;
+    details.edge_lengths = std::move(mean_dists);
+    details.fit_result = std::move(result);
+    details.nn_id = nn_id;
+    return details;
+}
+
+void append_confidence(MoleculeData& data, int nn_id, double prior_confidence) {
+    auto details = estimate_confidence_details(data, nn_id, prior_confidence);
+    int n = data.n_molecules();
+    data.confidence.resize(n);
+    for (int i = 0; i < n; ++i) {
+        data.confidence[i] = details.fit_result.assignment_probs(i, 0);
+    }
 }
 
 } // namespace baysor

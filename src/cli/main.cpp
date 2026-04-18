@@ -17,6 +17,7 @@
 #include "baysor/reporting/color_utils.h"
 #include "baysor/reporting/output.h"
 #include "baysor/reporting/preview_report.h"
+#include "baysor/reporting/run_report.h"
 
 #include "baysor/utils/general.h"
 
@@ -26,6 +27,7 @@
 #include <fstream>
 #include <iostream>
 #include <limits>
+#include <optional>
 #include <string>
 #include <type_traits>
 #include <unordered_map>
@@ -84,8 +86,22 @@ int cmd_run(
 
     double psc = opts.segmentation.prior_segmentation_confidence;
 
+    std::vector<double> noise_edge_lengths;
+    NoiseFitResult noise_fit;
+    int confidence_nn_id = opts.molecules.confidence_nn_id;
     spdlog::info("Estimating confidence...");
-    append_confidence(data, opts.molecules.confidence_nn_id, psc);
+    if (plot) {
+        auto conf_details = estimate_confidence_details(data, opts.molecules.confidence_nn_id, psc);
+        confidence_nn_id = conf_details.nn_id;
+        noise_edge_lengths = std::move(conf_details.edge_lengths);
+        noise_fit = std::move(conf_details.fit_result);
+        data.confidence.resize(data.n_molecules());
+        for (int i = 0; i < data.n_molecules(); ++i) {
+            data.confidence[i] = noise_fit.assignment_probs(i, 0);
+        }
+    } else {
+        append_confidence(data, opts.molecules.confidence_nn_id, psc);
+    }
 
     // Build molecule adjacency graph (MRF)
     spdlog::info("Building molecule graph...");
@@ -126,14 +142,15 @@ int cmd_run(
     // Optional molecule clustering (pre-segmentation cell type assignment)
     // Uses ICA initialization (matching Julia), falls back to hash init on failure.
     std::vector<int> mol_clusters;
+    std::optional<ClusteringResult> clustering_result;
     if (opts.segmentation.n_clusters > 1) {
         spdlog::info("Clustering molecules into {} types (ICA init)...",
                      opts.segmentation.n_clusters);
-        auto cl = cluster_molecules_ica(
+        clustering_result = cluster_molecules_ica(
             data.gene, adj_list, data.confidence,
             opts.segmentation.n_clusters,
             /*tol=*/0.01, /*mrf_weight=*/1.0, /*max_iters=*/-1, /*verbose=*/true);
-        mol_clusters = std::move(cl.assignment);  // 1-based cluster IDs
+        mol_clusters = clustering_result->assignment;  // 1-based cluster IDs
         spdlog::info("Molecule clustering complete.");
     }
 
@@ -194,6 +211,8 @@ int cmd_run(
 
         // Save per-cell stats CSV
         spdlog::info("Saving cell stats...");
+        Eigen::MatrixXd cell_stats_mat;
+        std::vector<std::string> cell_stat_col_names;
         {
             std::vector<std::string> cell_names(n_cells_final);
             for (int i = 0; i < n_cells_final; ++i)
@@ -215,26 +234,26 @@ int cmd_run(
             bool has_clmol   = !bm_data.cluster_per_molecule.empty();
             bool has_lspan   = !lifespan_map.empty();
 
-            std::vector<std::string> col_names = {"x", "y"};
-            if (N == 3) col_names.push_back("z");
-            if (has_cluster) col_names.push_back("cluster");    // matches Julia position
-            col_names.push_back("n_transcripts");
-            col_names.push_back("density");
-            col_names.push_back("elongation");
-            col_names.push_back("area");
-            col_names.push_back("avg_confidence");
-            if (has_ac)    col_names.push_back("avg_assignment_confidence");
-            if (has_clmol) col_names.push_back("max_cluster_frac");
-            if (has_lspan) col_names.push_back("lifespan");
+            cell_stat_col_names = {"x", "y"};
+            if (N == 3) cell_stat_col_names.push_back("z");
+            if (has_cluster) cell_stat_col_names.push_back("cluster");    // matches Julia position
+            cell_stat_col_names.push_back("n_transcripts");
+            cell_stat_col_names.push_back("density");
+            cell_stat_col_names.push_back("elongation");
+            cell_stat_col_names.push_back("area");
+            cell_stat_col_names.push_back("avg_confidence");
+            if (has_ac)    cell_stat_col_names.push_back("avg_assignment_confidence");
+            if (has_clmol) cell_stat_col_names.push_back("max_cluster_frac");
+            if (has_lspan) cell_stat_col_names.push_back("lifespan");
 
             // Build name→index map so writing order is independent of names order
             std::unordered_map<std::string, int> ci_map;
-            for (int i = 0; i < static_cast<int>(col_names.size()); ++i)
-                ci_map[col_names[i]] = i;
+            for (int i = 0; i < static_cast<int>(cell_stat_col_names.size()); ++i)
+                ci_map[cell_stat_col_names[i]] = i;
 
-            int n_cols = static_cast<int>(col_names.size());
-            Eigen::MatrixXd stats(n_cells_final, n_cols);
-            stats.fill(std::numeric_limits<double>::quiet_NaN());
+            int n_cols = static_cast<int>(cell_stat_col_names.size());
+            cell_stats_mat.resize(n_cells_final, n_cols);
+            cell_stats_mat.fill(std::numeric_limits<double>::quiet_NaN());
 
             for (int ci = 0; ci < n_cells_final; ++ci) {
                 const auto& ids = ids_by_cell[ci];
@@ -251,14 +270,14 @@ int cmd_run(
                 }
                 double denom = np > 0 ? np : 1.0;
 
-                stats(ci, ci_map["x"]) = sx / denom;
-                stats(ci, ci_map["y"]) = sy / denom;
-                if (N == 3) stats(ci, ci_map["z"]) = sz / denom;
+                cell_stats_mat(ci, ci_map["x"]) = sx / denom;
+                cell_stats_mat(ci, ci_map["y"]) = sy / denom;
+                if (N == 3) cell_stats_mat(ci, ci_map["z"]) = sz / denom;
 
-                stats(ci, ci_map["n_transcripts"]) = np;
-                stats(ci, ci_map["avg_confidence"]) = sum_conf / denom;
-                if (has_ac)    stats(ci, ci_map["avg_assignment_confidence"]) = sum_ac / denom;
-                if (has_cluster) stats(ci, ci_map["cluster"]) = bm_data.cluster_per_cell[ci];
+                cell_stats_mat(ci, ci_map["n_transcripts"]) = np;
+                cell_stats_mat(ci, ci_map["avg_confidence"]) = sum_conf / denom;
+                if (has_ac)    cell_stats_mat(ci, ci_map["avg_assignment_confidence"]) = sum_ac / denom;
+                if (has_cluster) cell_stats_mat(ci, ci_map["cluster"]) = bm_data.cluster_per_cell[ci];
 
                 // --- Convex hull metrics (only for cells with > 2 molecules) ---
                 if (np > 2) {
@@ -269,8 +288,8 @@ int cmd_run(
                     }
                     auto hull = convex_hull(pos2d);
                     double area = polygon_area(hull);
-                    stats(ci, ci_map["area"])    = area;
-                    stats(ci, ci_map["density"]) = (area > 0) ? (np / area)
+                    cell_stats_mat(ci, ci_map["area"])    = area;
+                    cell_stats_mat(ci, ci_map["density"]) = (area > 0) ? (np / area)
                                                                : std::numeric_limits<double>::quiet_NaN();
 
                     // Elongation: eigenvalue ratio of 2D sample covariance
@@ -285,7 +304,7 @@ int cmd_run(
                     cov /= np;
                     Eigen::SelfAdjointEigenSolver<Eigen::Matrix2d> eig(cov);
                     auto ev = eig.eigenvalues();  // ascending order
-                    stats(ci, ci_map["elongation"]) = (ev(0) > 1e-10)
+                    cell_stats_mat(ci, ci_map["elongation"]) = (ev(0) > 1e-10)
                         ? (ev(1) / ev(0)) : std::numeric_limits<double>::quiet_NaN();
                 }
 
@@ -295,32 +314,40 @@ int cmd_run(
                     for (int mol : ids) cl_cnt[bm_data.cluster_per_molecule[mol]]++;
                     int mc = 0;
                     for (auto& [k, v] : cl_cnt) if (v > mc) mc = v;
-                    stats(ci, ci_map["max_cluster_frac"]) = static_cast<double>(mc) / np;
+                    cell_stats_mat(ci, ci_map["max_cluster_frac"]) = static_cast<double>(mc) / np;
                 }
 
                 // lifespan
                 if (has_lspan) {
                     int guid = bm_data.components[ci].guid;
                     auto it2 = lifespan_map.find(guid);
-                    stats(ci, ci_map["lifespan"]) = (it2 != lifespan_map.end()) ? it2->second : -1;
+                    cell_stats_mat(ci, ci_map["lifespan"]) = (it2 != lifespan_map.end()) ? it2->second : -1;
                 }
             }
 
-            save_cell_stat_df(stats, cell_names, col_names, out_paths.cell_stats);
+            save_cell_stat_df(cell_stats_mat, cell_names, cell_stat_col_names, out_paths.cell_stats);
         }
 
         // Save cell polygons as GeoJSON
-        if (polygon_format != "none") {
-            spdlog::info("Saving cell polygons...");
+        PolygonCollection poly_joined;
+        PolygonStack poly_stack;
+        bool have_polygons = false;
+        if (polygon_format != "none" || plot) {
             std::vector<std::string> cell_names(n_cells_final);
             for (int ci = 0; ci < n_cells_final; ++ci) {
                 cell_names[ci] = "cell_" + std::to_string(ci + 1);
             }
 
             auto pos = data.position_matrix();
-            auto [poly_joined, poly_stack] = boundary_polygons_auto(
+            auto polys = boundary_polygons_auto(
                 pos, bm_data.assignment, /*estimate_per_z=*/(N == 3), &cell_names, /*verbose=*/true);
+            poly_joined = std::move(polys.first);
+            poly_stack = std::move(polys.second);
+            have_polygons = true;
+        }
 
+        if (polygon_format != "none") {
+            spdlog::info("Saving cell polygons...");
             if (N == 3) {
                 save_polygon_stack_geojson(poly_stack, out_paths, polygon_format);
             } else {
@@ -363,6 +390,45 @@ int cmd_run(
 
         // Save parameters dump
         save_params_toml(opts, cli_cmd, out_paths.params_dump);
+
+        if (plot) {
+            spdlog::info("Generating HTML run report...");
+            auto diagnostic_html = generate_run_diagnostic_html(
+                data,
+                noise_edge_lengths,
+                noise_fit,
+                confidence_nn_id,
+                bm_data.assignment,
+                bm_data.n_components_trace,
+                bm_data.assignment_confidence,
+                clustering_result ? &*clustering_result : nullptr,
+                cell_stats_mat,
+                cell_stat_col_names,
+                opts.prior,
+                opts.segmentation.scale,
+                opts.segmentation.scale_std
+            );
+            std::ofstream diag_file(out_paths.diagnostic_report);
+            if (!diag_file) {
+                spdlog::warn("Could not write diagnostic report '{}'", out_paths.diagnostic_report);
+            } else {
+                diag_file << diagnostic_html;
+            }
+
+            auto segmentation_html = generate_run_segmentation_html(
+                data,
+                bm_data.assignment,
+                ncv_color,
+                mol_clusters.empty() ? nullptr : &mol_clusters,
+                have_polygons ? &poly_joined : nullptr
+            );
+            std::ofstream seg_plot_file(out_paths.molecule_plot);
+            if (!seg_plot_file) {
+                spdlog::warn("Could not write segmentation plot '{}'", out_paths.molecule_plot);
+            } else {
+                seg_plot_file << segmentation_html;
+            }
+        }
 
         spdlog::info("Results saved to '{}'", output);
     };

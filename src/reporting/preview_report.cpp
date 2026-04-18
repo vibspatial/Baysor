@@ -17,6 +17,11 @@ namespace baysor {
 
 static constexpr double PI = 3.14159265358979323846;
 
+struct RasterViewport {
+    double xmin, xmax, ymin, ymax, xrange, yrange;
+    int width_px, height_px;
+};
+
 static inline double normal_pdf(double x, double mu, double sigma) {
     if (sigma <= 0.0) return 0.0;
     double z = (x - mu) / sigma;
@@ -83,15 +88,11 @@ static std::string pixels_to_base64_png(const std::vector<uint8_t>& pixels,
 // Rasterize a scatter plot into an RGB pixel buffer.
 // Each molecule is one pixel; order matters (last drawn wins on collision).
 // width_px: desired output width. Height is set to preserve aspect ratio.
-static std::string render_scatter_impl(
+static RasterViewport make_viewport(
     const std::vector<double>& x,
     const std::vector<double>& y,
-    int n,
-    int width_px,
-    std::function<void(int, uint8_t&, uint8_t&, uint8_t&)> color_fn
+    int width_px
 ) {
-    if (n == 0) return {};
-
     double xmin = *std::min_element(x.begin(), x.end());
     double xmax = *std::max_element(x.begin(), x.end());
     double ymin = *std::min_element(y.begin(), y.end());
@@ -99,17 +100,78 @@ static std::string render_scatter_impl(
     double xrange = std::max(xmax - xmin, 1.0);
     double yrange = std::max(ymax - ymin, 1.0);
 
-    // Add 1% margin on each side.
     double margin = 0.01;
     xmin -= xrange * margin; xmax += xrange * margin; xrange *= 1 + 2 * margin;
     ymin -= yrange * margin; ymax += yrange * margin; yrange *= 1 + 2 * margin;
 
     int height_px = std::max(1, static_cast<int>(width_px * yrange / xrange));
-    // Cap at reasonable size to avoid huge images.
     if (height_px > width_px * 4) height_px = width_px * 4;
 
+    return RasterViewport{xmin, xmax, ymin, ymax, xrange, yrange, width_px, height_px};
+}
+
+static inline std::pair<int, int> map_to_pixel(double x, double y, const RasterViewport& vp) {
+    int px = static_cast<int>((x - vp.xmin) / vp.xrange * vp.width_px);
+    int py = static_cast<int>((vp.ymax - y) / vp.yrange * vp.height_px);
+    px = std::max(0, std::min(vp.width_px - 1, px));
+    py = std::max(0, std::min(vp.height_px - 1, py));
+    return {px, py};
+}
+
+static void draw_line(
+    std::vector<uint8_t>& pixels,
+    int width_px,
+    int height_px,
+    int x0, int y0, int x1, int y1,
+    uint8_t r, uint8_t g, uint8_t b
+) {
+    int dx = std::abs(x1 - x0), sx = x0 < x1 ? 1 : -1;
+    int dy = -std::abs(y1 - y0), sy = y0 < y1 ? 1 : -1;
+    int err = dx + dy;
+    while (true) {
+        if (x0 >= 0 && x0 < width_px && y0 >= 0 && y0 < height_px) {
+            int off = (y0 * width_px + x0) * 3;
+            pixels[off] = r;
+            pixels[off + 1] = g;
+            pixels[off + 2] = b;
+        }
+        if (x0 == x1 && y0 == y1) break;
+        int e2 = 2 * err;
+        if (e2 >= dy) { err += dy; x0 += sx; }
+        if (e2 <= dx) { err += dx; y0 += sy; }
+    }
+}
+
+static void overlay_polygons(
+    std::vector<uint8_t>& pixels,
+    const RasterViewport& vp,
+    const PolygonCollection& polygons
+) {
+    for (const auto& [_, poly] : polygons) {
+        if (poly.rows() < 2 || poly.cols() < 2) continue;
+        for (int i = 0; i < poly.rows(); ++i) {
+            int j = (i + 1) % poly.rows();
+            auto [x0, y0] = map_to_pixel(poly(i, 0), poly(i, 1), vp);
+            auto [x1, y1] = map_to_pixel(poly(j, 0), poly(j, 1), vp);
+            draw_line(pixels, vp.width_px, vp.height_px, x0, y0, x1, y1, 0, 0, 0);
+        }
+    }
+}
+
+static std::string render_scatter_impl(
+    const std::vector<double>& x,
+    const std::vector<double>& y,
+    int n,
+    int width_px,
+    const PolygonCollection* polygons,
+    std::function<void(int, uint8_t&, uint8_t&, uint8_t&)> color_fn
+) {
+    if (n == 0) return {};
+
+    auto vp = make_viewport(x, y, width_px);
+
     // White background.
-    std::vector<uint8_t> pixels(width_px * height_px * 3, 255);
+    std::vector<uint8_t> pixels(vp.width_px * vp.height_px * 3, 255);
 
     // Writing different pixels from multiple threads is safe.  Two molecules
     // landing on the exact same pixel produce a benign write race (one color
@@ -117,25 +179,27 @@ static std::string render_scatter_impl(
     // serial "last molecule drawn wins" behaviour.
     #pragma omp parallel for schedule(static)
     for (int i = 0; i < n; ++i) {
-        int px = static_cast<int>((x[i] - xmin) / xrange * width_px);
-        int py = static_cast<int>((ymax - y[i]) / yrange * height_px); // flip Y
-        px = std::max(0, std::min(width_px  - 1, px));
-        py = std::max(0, std::min(height_px - 1, py));
+        auto [px, py] = map_to_pixel(x[i], y[i], vp);
         uint8_t r, g, b;
         color_fn(i, r, g, b);
-        int off = (py * width_px + px) * 3;
+        int off = (py * vp.width_px + px) * 3;
         pixels[off]     = r;
         pixels[off + 1] = g;
         pixels[off + 2] = b;
     }
 
-    return pixels_to_base64_png(pixels, width_px, height_px);
+    if (polygons && !polygons->empty()) {
+        overlay_polygons(pixels, vp, *polygons);
+    }
+
+    return pixels_to_base64_png(pixels, vp.width_px, vp.height_px);
 }
 
 std::string render_scatter_png(
     const std::vector<double>& x,
     const std::vector<double>& y,
     const std::vector<std::string>& colors,
+    const PolygonCollection* polygons,
     int width_px
 ) {
     int n = static_cast<int>(x.size());
@@ -143,7 +207,7 @@ std::string render_scatter_png(
     std::vector<uint8_t> cr(n), cg(n), cb(n);
     for (int i = 0; i < n; ++i) hex_to_rgb(colors[i], cr[i], cg[i], cb[i]);
 
-    return render_scatter_impl(x, y, n, width_px,
+    return render_scatter_impl(x, y, n, width_px, polygons,
         [&](int i, uint8_t& r, uint8_t& g, uint8_t& b) {
             r = cr[i]; g = cg[i]; b = cb[i];
         });
@@ -177,7 +241,7 @@ std::string render_confidence_png(
     int width_px
 ) {
     int n = static_cast<int>(x.size());
-    return render_scatter_impl(x, y, n, width_px,
+    return render_scatter_impl(x, y, n, width_px, nullptr,
         [&](int i, uint8_t& r, uint8_t& g, uint8_t& b) {
             blueorange_color(confidence[i], r, g, b);
         });
@@ -518,14 +582,13 @@ function openFullRes(src) {
 <div class="plot-container">
 <img class="png-plot" id="scatter_img" src=")";
     html << scatter_png;
-    html << R"(" alt="Local expression similarity">
-</div>
-
-<hr>
-<h1 id="noise_level">Noise level</h1>
-<p>Click image to open full resolution in a new tab.</p>
-<div class="plot-container">
-<img class="png-plot" id="conf_img" src=")";
+    html << "\" alt=\"Local expression similarity (NCV)\">\n"
+            "</div>\n\n"
+            "<hr>\n"
+            "<h1 id=\"noise_level\">Noise level</h1>\n"
+            "<p>Click image to open full resolution in a new tab.</p>\n"
+            "<div class=\"plot-container\">\n"
+            "<img class=\"png-plot\" id=\"conf_img\" src=\"";
     html << conf_png;
     html << R"(" alt="Transcript confidence">
 </div>

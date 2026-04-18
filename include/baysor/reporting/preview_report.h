@@ -1,6 +1,7 @@
 #pragma once
 
 #include "baysor/data_loading/data.h"
+#include "baysor/processing/data_processing/boundary_estimation.h"
 #include "baysor/processing/data_processing/noise_estimation.h"
 #include "baysor/reporting/color_utils.h"
 #include <nlohmann/json.hpp>
@@ -15,6 +16,7 @@ std::string render_scatter_png(
     const std::vector<double>& x,
     const std::vector<double>& y,
     const std::vector<std::string>& colors,
+    const PolygonCollection* polygons = nullptr,
     int width_px = 6000
 );
 

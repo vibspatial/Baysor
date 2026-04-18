@@ -17,6 +17,14 @@ struct NoiseFitResult {
     std::vector<double> diffs;
 };
 
+/// Full details of confidence estimation, including per-molecule distances
+/// used by the noise model and the fitted posterior.
+struct ConfidenceEstimationDetails {
+    std::vector<double> edge_lengths;
+    NoiseFitResult fit_result;
+    int nn_id = 0;
+};
+
 /// Fit two-component mixture (signal vs noise) on KNN distances using MRF-regularized EM
 NoiseFitResult fit_noise_probabilities(
     const std::vector<double>& edge_lengths,
@@ -30,6 +38,13 @@ NoiseFitResult fit_noise_probabilities(
 /// Estimate per-molecule confidence scores and append to MoleculeData
 void append_confidence(
     MoleculeData& data,
+    int nn_id,
+    double prior_confidence = 0.5
+);
+
+/// Estimate confidence and return the full noise-model diagnostics.
+ConfidenceEstimationDetails estimate_confidence_details(
+    const MoleculeData& data,
     int nn_id,
     double prior_confidence = 0.5
 );

@@ -132,6 +132,7 @@ add_library(baysor_lib
     src/reporting/color_utils.cpp
     src/reporting/output.cpp
     src/reporting/preview_report.cpp
+    src/reporting/run_report.cpp
 )
 
 target_include_directories(baysor_lib PUBLIC
