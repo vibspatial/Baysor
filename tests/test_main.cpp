@@ -1171,6 +1171,113 @@ TEST(PriorSegmentation, LabeledMaskPreservesTouchingLabelsAndUsesLabelAreas) {
     std::remove(csv_path.c_str());
 }
 
+TEST(PriorSegmentation, BinaryMaskCropWindowPreservesAssignmentsAndAreas) {
+    const uint32_t width = 120, height = 120;
+    std::vector<uint8_t> pixels(width * height, 0);
+
+    for (uint32_t r = 10; r <= 14; ++r) {
+        for (uint32_t c = 20; c <= 24; ++c) {
+            pixels[static_cast<size_t>(r) * width + c] = 1;
+        }
+    }
+    for (uint32_t r = 20; r <= 24; ++r) {
+        for (uint32_t c = 40; c <= 44; ++c) {
+            pixels[static_cast<size_t>(r) * width + c] = 1;
+        }
+    }
+    for (uint32_t r = 30; r <= 34; ++r) {
+        for (uint32_t c = 60; c <= 64; ++c) {
+            pixels[static_cast<size_t>(r) * width + c] = 1;
+        }
+    }
+
+    auto mask_path = write_temp_tiff_mask_u8(pixels, width, height);
+    auto csv_path = write_temp_csv(
+        "x,y,gene\n"
+        "21,11,A\n"
+        "25,11,A\n"
+        "21,15,A\n"
+        "25,15,A\n"
+        "41,21,A\n"
+        "45,21,A\n"
+        "41,25,A\n"
+        "45,25,A\n"
+        "61,31,A\n"
+        "65,31,A\n"
+        "61,35,A\n"
+        "65,35,A\n"
+    );
+
+    baysor::MoleculeInputOptions opts;
+    opts.min_molecules_per_cell = 2;
+    baysor::fill_and_check_molecule_input_options(opts);
+    auto data = baysor::load_molecules(csv_path, opts);
+
+    baysor::PriorInputOptions prior;
+    prior.type = baysor::PriorInputType::Image;
+    prior.path = mask_path;
+    prior.min_molecules_per_segment = 2;
+    prior.estimate_scale_from_prior = true;
+
+    auto [scale, scale_std] = baysor::load_prior_segmentation(data, prior, 2);
+
+    EXPECT_EQ(data.prior_segmentation,
+              (std::vector<int>{1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3}));
+    EXPECT_NEAR(scale, std::sqrt(25.0 / M_PI), 1e-6);
+    EXPECT_NEAR(scale_std, 0.0, 1e-6);
+
+    std::remove(mask_path.c_str());
+    std::remove(csv_path.c_str());
+}
+
+TEST(PriorSegmentation, LabeledMaskCropWindowPreservesAssignmentsAndAreas) {
+    const uint32_t width = 140, height = 140;
+    std::vector<uint8_t> pixels(width * height, 0);
+
+    for (uint32_t r = 20; r <= 22; ++r) {
+        for (uint32_t c = 30; c <= 32; ++c) {
+            pixels[static_cast<size_t>(r) * width + c] = 1;
+        }
+        for (uint32_t c = 35; c <= 37; ++c) {
+            pixels[static_cast<size_t>(r) * width + c] = 2;
+        }
+        for (uint32_t c = 40; c <= 42; ++c) {
+            pixels[static_cast<size_t>(r) * width + c] = 3;
+        }
+    }
+
+    auto mask_path = write_temp_tiff_mask_u8(pixels, width, height);
+    auto csv_path = write_temp_csv(
+        "x,y,gene\n"
+        "31,21,A\n"
+        "33,23,A\n"
+        "36,21,A\n"
+        "38,23,A\n"
+        "41,21,A\n"
+        "43,23,A\n"
+    );
+
+    baysor::MoleculeInputOptions opts;
+    opts.min_molecules_per_cell = 2;
+    baysor::fill_and_check_molecule_input_options(opts);
+    auto data = baysor::load_molecules(csv_path, opts);
+
+    baysor::PriorInputOptions prior;
+    prior.type = baysor::PriorInputType::Image;
+    prior.path = mask_path;
+    prior.min_molecules_per_segment = 2;
+    prior.estimate_scale_from_prior = true;
+
+    auto [scale, scale_std] = baysor::load_prior_segmentation(data, prior, 2);
+
+    EXPECT_EQ(data.prior_segmentation, (std::vector<int>{1, 1, 2, 2, 3, 3}));
+    EXPECT_NEAR(scale, std::sqrt(9.0 / M_PI), 1e-6);
+    EXPECT_NEAR(scale_std, 0.0, 1e-6);
+
+    std::remove(mask_path.c_str());
+    std::remove(csv_path.c_str());
+}
+
 // ============================================================================
 // Options
 // ============================================================================

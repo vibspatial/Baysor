@@ -35,6 +35,60 @@ struct BoundaryPolygon {
     double bbox_area = 0.0;
 };
 
+struct MoleculeBounds2D {
+    bool valid = false;
+    double min_x = 0.0;
+    double max_x = 0.0;
+    double min_y = 0.0;
+    double max_y = 0.0;
+};
+
+MoleculeBounds2D compute_molecule_bounds(
+    const std::vector<double>& mol_x,
+    const std::vector<double>& mol_y)
+{
+    MoleculeBounds2D bounds;
+    if (mol_x.empty() || mol_y.empty()) return bounds;
+    bounds.valid = true;
+    bounds.min_x = bounds.max_x = mol_x[0];
+    bounds.min_y = bounds.max_y = mol_y[0];
+    for (size_t i = 1; i < mol_x.size(); ++i) {
+        bounds.min_x = std::min(bounds.min_x, mol_x[i]);
+        bounds.max_x = std::max(bounds.max_x, mol_x[i]);
+        bounds.min_y = std::min(bounds.min_y, mol_y[i]);
+        bounds.max_y = std::max(bounds.max_y, mol_y[i]);
+    }
+    return bounds;
+}
+
+void filter_boundary_polygons_to_molecule_bounds(
+    std::vector<BoundaryPolygon>& polygons,
+    const MoleculeBounds2D& bounds)
+{
+    if (!bounds.valid || polygons.empty()) return;
+    size_t before = polygons.size();
+    polygons.erase(
+        std::remove_if(
+            polygons.begin(), polygons.end(),
+            [&](const BoundaryPolygon& poly) {
+                return poly.max_x < bounds.min_x || poly.min_x > bounds.max_x ||
+                       poly.max_y < bounds.min_y || poly.min_y > bounds.max_y;
+            }),
+        polygons.end());
+
+    if (polygons.size() != before) {
+        spdlog::info(
+            "Filtered boundary priors to {} polygons overlapping molecule bounds "
+            "[x=({:.2f}, {:.2f}), y=({:.2f}, {:.2f})] from {} total",
+            polygons.size(), bounds.min_x, bounds.max_x, bounds.min_y, bounds.max_y, before);
+    } else {
+        spdlog::info(
+            "All {} boundary polygons overlap molecule bounds "
+            "[x=({:.2f}, {:.2f}), y=({:.2f}, {:.2f})]",
+            before, bounds.min_x, bounds.max_x, bounds.min_y, bounds.max_y);
+    }
+}
+
 bool point_in_polygon(const BoundaryPolygon& poly, double x, double y) {
     bool inside = false;
     int n = static_cast<int>(poly.xs.size());
@@ -430,11 +484,32 @@ static void filter_component_pixel_areas_by_molecules(
 // Image-based segmentation loading (TIFF label mask)
 // ============================================================================
 
-// Helper: read the full TIFF into a uint8 flat buffer (normalised: 0=bg, nonzero=foreground value)
-// while also detecting whether the original TIFF stores multiple distinct non-zero labels.
-static std::vector<uint8_t> read_tiff_mask_uint8(
-    const std::string& path, uint32_t& out_width, uint32_t& out_height,
-    uint16_t& out_bps, bool& has_multiple_nonzero_values)
+struct TiffWindow {
+    bool valid = false;
+    uint32_t full_width = 0;
+    uint32_t full_height = 0;
+    uint32_t row0 = 0;
+    uint32_t row1 = 0;
+    uint32_t col0 = 0;
+    uint32_t col1 = 0;
+
+    uint32_t width() const {
+        return (valid && row1 >= row0 && col1 >= col0) ? (col1 - col0 + 1) : 0;
+    }
+    uint32_t height() const {
+        return (valid && row1 >= row0 && col1 >= col0) ? (row1 - row0 + 1) : 0;
+    }
+    bool is_empty() const {
+        return width() == 0 || height() == 0;
+    }
+    bool is_full_image() const {
+        return row0 == 0 && col0 == 0 &&
+               row1 + 1 == full_height && col1 + 1 == full_width;
+    }
+};
+
+static std::tuple<TIFF*, uint32_t, uint32_t, uint16_t> open_tiff_with_metadata(
+    const std::string& path)
 {
     TIFFSetWarningHandler(nullptr);
     TIFF* tif = TIFFOpen(path.c_str(), "r");
@@ -446,11 +521,88 @@ static std::vector<uint8_t> read_tiff_mask_uint8(
     TIFFGetField(tif, TIFFTAG_IMAGELENGTH, &h);
     TIFFGetFieldDefaulted(tif, TIFFTAG_BITSPERSAMPLE,  &bps);
     TIFFGetFieldDefaulted(tif, TIFFTAG_SAMPLESPERPIXEL, &spp);
-    out_width = w; out_height = h; out_bps = bps;
+    if (spp != 1) {
+        TIFFClose(tif);
+        throw std::runtime_error("Only single-channel TIFF masks are supported");
+    }
+    return {tif, w, h, bps};
+}
+
+static TiffWindow compute_tiff_window_from_molecules(
+    const std::vector<double>& mol_x,
+    const std::vector<double>& mol_y,
+    uint32_t full_width,
+    uint32_t full_height)
+{
+    TiffWindow window;
+    window.full_width = full_width;
+    window.full_height = full_height;
+    if (full_width == 0 || full_height == 0 || mol_x.empty()) {
+        return window;
+    }
+
+    bool saw_in_bounds = false;
+    uint32_t min_row = full_height;
+    uint32_t max_row = 0;
+    uint32_t min_col = full_width;
+    uint32_t max_col = 0;
+
+    for (size_t i = 0; i < mol_x.size(); ++i) {
+        int col = static_cast<int>(std::round(mol_x[i])) - 1;
+        int row = static_cast<int>(std::round(mol_y[i])) - 1;
+        if (row < 0 || col < 0 ||
+            row >= static_cast<int>(full_height) ||
+            col >= static_cast<int>(full_width)) {
+            continue;
+        }
+        saw_in_bounds = true;
+        min_row = std::min(min_row, static_cast<uint32_t>(row));
+        max_row = std::max(max_row, static_cast<uint32_t>(row));
+        min_col = std::min(min_col, static_cast<uint32_t>(col));
+        max_col = std::max(max_col, static_cast<uint32_t>(col));
+    }
+
+    if (!saw_in_bounds) {
+        return window;
+    }
+
+    window.valid = true;
+    window.row0 = min_row;
+    window.row1 = max_row;
+    window.col0 = min_col;
+    window.col1 = max_col;
+    return window;
+}
+
+// Helper: read a TIFF window into a uint8 flat buffer (normalised: 0=bg, nonzero=foreground value)
+// while also detecting whether the selected region stores multiple distinct non-zero labels.
+static std::vector<uint8_t> read_tiff_mask_uint8_window(
+    const std::string& path,
+    const TiffWindow& window,
+    uint16_t& out_bps,
+    bool& has_multiple_nonzero_values)
+{
+    auto [tif, full_w, full_h, bps] = open_tiff_with_metadata(path);
+    out_bps = bps;
     has_multiple_nonzero_values = false;
 
-    spdlog::info("Loading TIFF mask: {}x{}, {} bits/sample", w, h, bps);
+    if (window.is_empty()) {
+        TIFFClose(tif);
+        spdlog::info("No molecules overlap the TIFF image bounds; skipping mask window load");
+        return {};
+    }
 
+    if (window.is_full_image()) {
+        spdlog::info("Loading TIFF mask: {}x{}, {} bits/sample", full_w, full_h, bps);
+    } else {
+        spdlog::info(
+            "Loading TIFF mask window: {}x{} from full {}x{} (rows {}:{}, cols {}:{}), {} bits/sample",
+            window.width(), window.height(), full_w, full_h,
+            window.row0, window.row1, window.col0, window.col1, bps);
+    }
+
+    uint32_t w = window.width();
+    uint32_t h = window.height();
     size_t total = static_cast<size_t>(h) * w;
     std::vector<uint8_t> mask(total, 0);
 
@@ -459,14 +611,14 @@ static std::vector<uint8_t> read_tiff_mask_uint8(
     uint32_t first_nonzero_value = 0;
     bool saw_nonzero_value = false;
 
-    for (uint32_t row = 0; row < h; ++row) {
+    for (uint32_t row = window.row0; row <= window.row1; ++row) {
         if (TIFFReadScanline(tif, row_buf.data(), row, 0) < 0) {
             TIFFClose(tif);
             throw std::runtime_error("Error reading TIFF scanline " + std::to_string(row));
         }
-        uint8_t* dst = mask.data() + static_cast<size_t>(row) * w;
+        uint8_t* dst = mask.data() + static_cast<size_t>(row - window.row0) * w;
         if (bps == 8) {
-            for (uint32_t c = 0; c < w; ++c) {
+            for (uint32_t c = window.col0; c <= window.col1; ++c) {
                 uint32_t val = row_buf[c];
                 if (val > 0) {
                     if (!saw_nonzero_value) {
@@ -476,11 +628,11 @@ static std::vector<uint8_t> read_tiff_mask_uint8(
                         has_multiple_nonzero_values = true;
                     }
                 }
-                dst[c] = val ? 1 : 0;  // normalise to 0/1
+                dst[c - window.col0] = val ? 1 : 0;  // normalise to 0/1
             }
         } else if (bps == 16) {
             const uint16_t* src = reinterpret_cast<const uint16_t*>(row_buf.data());
-            for (uint32_t c = 0; c < w; ++c) {
+            for (uint32_t c = window.col0; c <= window.col1; ++c) {
                 uint32_t val = src[c];
                 if (val > 0) {
                     if (!saw_nonzero_value) {
@@ -490,11 +642,11 @@ static std::vector<uint8_t> read_tiff_mask_uint8(
                         has_multiple_nonzero_values = true;
                     }
                 }
-                dst[c] = val ? 1 : 0;
+                dst[c - window.col0] = val ? 1 : 0;
             }
         } else if (bps == 32) {
             const uint32_t* src = reinterpret_cast<const uint32_t*>(row_buf.data());
-            for (uint32_t c = 0; c < w; ++c) {
+            for (uint32_t c = window.col0; c <= window.col1; ++c) {
                 uint32_t val = src[c];
                 if (val > 0) {
                     if (!saw_nonzero_value) {
@@ -504,7 +656,7 @@ static std::vector<uint8_t> read_tiff_mask_uint8(
                         has_multiple_nonzero_values = true;
                     }
                 }
-                dst[c] = val ? 1 : 0;
+                dst[c - window.col0] = val ? 1 : 0;
             }
         } else {
             TIFFClose(tif);
@@ -521,23 +673,35 @@ ImageSegResult load_prior_from_image(
     const std::vector<double>& mol_y,
     int min_molecules_per_segment
 ) {
-    uint32_t width = 0, height = 0; uint16_t bps = 0;
+    auto [meta_tif, full_width, full_height, meta_bps] = open_tiff_with_metadata(image_path);
+    TIFFClose(meta_tif);
+
+    TiffWindow window = compute_tiff_window_from_molecules(
+        mol_x, mol_y, full_width, full_height);
+    uint32_t width = window.width(), height = window.height(); uint16_t bps = meta_bps;
     bool has_multiple_nonzero_values = false;
-    // Load the mask: binary (0/1). Memory: 1 byte per pixel.
-    auto mask = read_tiff_mask_uint8(
-        image_path, width, height, bps, has_multiple_nonzero_values);
-
     int n_mols = static_cast<int>(mol_x.size());
+    std::vector<int> segment_per_molecule(n_mols, 0);
+    if (window.is_empty()) {
+        return {segment_per_molecule, {}};
+    }
 
-    // Compute pixel indices for each molecule (1-based molecule coords → 0-based pixels)
-    auto mol_col = [&](int i) { return static_cast<int>(std::round(mol_x[i])) - 1; };
-    auto mol_row = [&](int i) { return static_cast<int>(std::round(mol_y[i])) - 1; };
+    // Load the selected window of the mask: binary (0/1).
+    auto mask = read_tiff_mask_uint8_window(
+        image_path, window, bps, has_multiple_nonzero_values);
+
+    // Compute pixel indices for each molecule in the local window
+    auto mol_col = [&](int i) {
+        return static_cast<int>(std::round(mol_x[i])) - 1 - static_cast<int>(window.col0);
+    };
+    auto mol_row = [&](int i) {
+        return static_cast<int>(std::round(mol_y[i])) - 1 - static_cast<int>(window.row0);
+    };
     auto in_bounds = [&](int r, int c) {
         return r >= 0 && r < static_cast<int>(height) &&
                c >= 0 && c < static_cast<int>(width);
     };
 
-    std::vector<int> segment_per_molecule(n_mols, 0);
     // pixel area per CC label (1-based); only populated for binary masks
     std::vector<size_t> pixel_areas;
     bool already_filtered = false;
@@ -631,54 +795,66 @@ ImageSegResult load_prior_from_image(
         // ---------------------------------------------------------------
         spdlog::info("Multi-label TIFF mask detected; preserving label values...");
 
-        TIFFSetWarningHandler(nullptr);
-        TIFF* tif = TIFFOpen(image_path.c_str(), "r");
-        if (!tif) throw std::runtime_error("Cannot re-open TIFF: " + image_path);
+        auto [tif, tiff_width, tiff_height, tiff_bps] = open_tiff_with_metadata(image_path);
+        if (tiff_width != full_width || tiff_height != full_height) {
+            TIFFClose(tif);
+            throw std::runtime_error("TIFF dimensions changed between metadata and data reads");
+        }
+        bps = tiff_bps;
 
         tmsize_t scanline_size = TIFFScanlineSize(tif);
         std::vector<uint8_t> row_buf(scanline_size);
 
-        // Build sorted molecule list by row for efficient scanline matching
-        std::vector<std::pair<int,int>> mol_by_row(n_mols);  // (row, mol_idx)
-        for (int i = 0; i < n_mols; ++i)
-            mol_by_row[i] = {mol_row(i), i};
+        // Build sorted molecule list by local row for efficient scanline matching
+        std::vector<std::pair<int,int>> mol_by_row;  // (row, mol_idx)
+        mol_by_row.reserve(n_mols);
+        for (int i = 0; i < n_mols; ++i) {
+            int local_row_i = mol_row(i);
+            int local_col_i = mol_col(i);
+            if (in_bounds(local_row_i, local_col_i)) {
+                mol_by_row.push_back({local_row_i, i});
+            }
+        }
         std::sort(mol_by_row.begin(), mol_by_row.end());
 
         std::unordered_map<uint32_t, size_t> pixel_areas_by_label;
         int mol_ptr = 0;
-        for (uint32_t row = 0; row < height; ++row) {
+        for (uint32_t row = window.row0; row <= window.row1; ++row) {
             if (TIFFReadScanline(tif, row_buf.data(), row, 0) < 0) {
                 TIFFClose(tif);
                 throw std::runtime_error("Error reading TIFF scanline " + std::to_string(row));
             }
+            int local_row = static_cast<int>(row - window.row0);
 
             if (bps == 8) {
-                for (uint32_t c = 0; c < width; ++c) {
+                for (uint32_t c = window.col0; c <= window.col1; ++c) {
                     uint32_t val = row_buf[c];
                     if (val > 0) pixel_areas_by_label[val]++;
                 }
             } else if (bps == 16) {
                 const uint16_t* src = reinterpret_cast<const uint16_t*>(row_buf.data());
-                for (uint32_t c = 0; c < width; ++c) {
+                for (uint32_t c = window.col0; c <= window.col1; ++c) {
                     uint32_t val = src[c];
                     if (val > 0) pixel_areas_by_label[val]++;
                 }
             } else if (bps == 32) {
                 const uint32_t* src = reinterpret_cast<const uint32_t*>(row_buf.data());
-                for (uint32_t c = 0; c < width; ++c) {
+                for (uint32_t c = window.col0; c <= window.col1; ++c) {
                     uint32_t val = src[c];
                     if (val > 0) pixel_areas_by_label[val]++;
                 }
             }
 
-            while (mol_ptr < n_mols && mol_by_row[mol_ptr].first == static_cast<int>(row)) {
+            while (mol_ptr < static_cast<int>(mol_by_row.size()) &&
+                   mol_by_row[mol_ptr].first == local_row) {
                 int mi = mol_by_row[mol_ptr].second;
                 int c  = mol_col(mi);
-                if (in_bounds(static_cast<int>(row), c)) {
+                if (in_bounds(local_row, c)) {
                     uint32_t val = 0;
-                    if (bps == 8)       val = row_buf[c];
-                    else if (bps == 16) val = reinterpret_cast<const uint16_t*>(row_buf.data())[c];
-                    else if (bps == 32) val = reinterpret_cast<const uint32_t*>(row_buf.data())[c];
+                    uint32_t src_col = static_cast<uint32_t>(c) + window.col0;
+                    if (bps == 8)       val = row_buf[src_col];
+                    else if (bps == 16) val = reinterpret_cast<const uint16_t*>(row_buf.data())[src_col];
+                    else if (bps == 32) val = reinterpret_cast<const uint32_t*>(row_buf.data())[src_col];
                     segment_per_molecule[mi] = static_cast<int>(val);
                 }
                 ++mol_ptr;
@@ -755,6 +931,8 @@ std::pair<double, double> load_prior_segmentation(
         }
     } else if (seg_type == PriorInputType::Boundary) {
         auto polygons = load_boundary_polygons(prior_opts.path);
+        filter_boundary_polygons_to_molecule_bounds(
+            polygons, compute_molecule_bounds(data.x, data.y));
         data.prior_segmentation = assign_molecules_to_boundaries(
             data.x, data.y, polygons, prior_opts.min_molecules_per_segment);
 
