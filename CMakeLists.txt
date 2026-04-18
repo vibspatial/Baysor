@@ -137,6 +137,7 @@ add_library(baysor_lib
 
 target_include_directories(baysor_lib PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${HDF5_INCLUDE_DIRS}
 )
 
 target_link_libraries(baysor_lib PUBLIC
