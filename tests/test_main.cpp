@@ -29,8 +29,10 @@
 #include <sstream>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 #include <cstdio>
+#include <random>
 #include <parquet/arrow/writer.h>
 #include <tiffio.h>
 
@@ -220,6 +222,85 @@ static void expect_vector_near(
     for (size_t i = 0; i < actual.size(); ++i) {
         EXPECT_NEAR(actual[i], expected[i], tol) << "index=" << i;
     }
+}
+
+static Eigen::SparseMatrix<float> make_random_count_matrix(
+    int n_genes,
+    int n_molecules,
+    int nnz_per_col,
+    int seed
+) {
+    std::mt19937 rng(seed);
+    std::uniform_int_distribution<int> gene_dist(0, n_genes - 1);
+    std::uniform_real_distribution<float> weight_dist(0.05f, 1.0f);
+
+    std::vector<Eigen::Triplet<float>> trips;
+    trips.reserve(static_cast<size_t>(n_molecules) * nnz_per_col);
+    std::vector<int> ids;
+    ids.reserve(nnz_per_col);
+
+    for (int col = 0; col < n_molecules; ++col) {
+        ids.clear();
+        std::unordered_set<int> chosen;
+        chosen.reserve(static_cast<size_t>(nnz_per_col) * 2);
+        while (static_cast<int>(ids.size()) < nnz_per_col) {
+            int id = gene_dist(rng);
+            if (chosen.insert(id).second) ids.push_back(id);
+        }
+        for (int row : ids) {
+            trips.emplace_back(row, col, std::log(weight_dist(rng) * 10000.0f + 1e-5f));
+        }
+    }
+
+    Eigen::SparseMatrix<float> mat(n_genes, n_molecules);
+    mat.setFromTriplets(trips.begin(), trips.end(),
+                        [](float a, float b) { return a + b; });
+    mat.makeCompressed();
+    return mat;
+}
+
+static Eigen::MatrixXf estimate_gene_vectors_reference(
+    const Eigen::SparseMatrix<float>& count_matrix,
+    int n_components,
+    bool per_molecule
+) {
+    int n_genes = static_cast<int>(count_matrix.rows());
+    int n_mols = static_cast<int>(count_matrix.cols());
+    if (n_genes == 0 || n_mols == 0) return Eigen::MatrixXf();
+
+    std::mt19937 rng(42);
+    std::normal_distribution<float> normal(0.0f, 1.0f);
+    Eigen::MatrixXf random_vectors(n_genes, n_components);
+    for (int i = 0; i < n_genes; ++i)
+        for (int j = 0; j < n_components; ++j)
+            random_vectors(i, j) = normal(rng);
+
+    Eigen::SparseMatrix<float> coexpr_sp = count_matrix * count_matrix.transpose();
+    Eigen::MatrixXf coexpr(coexpr_sp);
+
+    constexpr float var_clip = 0.05f;
+    if (var_clip > 0 && n_genes > 1) {
+        Eigen::VectorXf diag_vals = coexpr.diagonal();
+        Eigen::VectorXf total_var = coexpr.rowwise().sum();
+
+        std::vector<float> df_sorted(n_genes);
+        for (int i = 0; i < n_genes; ++i)
+            df_sorted[i] = (total_var(i) > 0) ? diag_vals(i) / total_var(i) : 0.0f;
+        std::sort(df_sorted.begin(), df_sorted.end());
+        float q = df_sorted[static_cast<int>((1.0f - var_clip) * (n_genes - 1))];
+
+        for (int i = 0; i < n_genes; ++i)
+            coexpr(i, i) = std::min(q * total_var(i), diag_vals(i));
+    }
+
+    Eigen::VectorXf row_sums = coexpr.rowwise().sum();
+    Eigen::MatrixXf gene_emb = coexpr * random_vectors;
+    for (int i = 0; i < n_genes; ++i) {
+        if (row_sums(i) > 0) gene_emb.row(i) /= row_sums(i);
+    }
+
+    if (per_molecule) return (count_matrix.transpose() * gene_emb).transpose();
+    return gene_emb.transpose();
 }
 
 static std::string format_int_vector(const std::vector<int>& values) {
@@ -2378,4 +2459,34 @@ TEST(RunReport, GeneratesSegmentationHtml) {
     EXPECT_NE(html.find("Local expression similarity (NCV)"), std::string::npos);
     EXPECT_NE(html.find("Molecule clustering"), std::string::npos);
     EXPECT_NE(html.find("data:image/png;base64,"), std::string::npos);
+}
+
+TEST(NeighborhoodComposition, EstimateGeneVectorsMatchesReferencePerMolecule) {
+    Eigen::SparseMatrix<float> count_matrix = make_random_count_matrix(64, 320, 18, 123);
+    std::vector<int> gene_ids(count_matrix.cols(), 1);
+
+    Eigen::MatrixXf actual = baysor::estimate_gene_vectors(count_matrix, gene_ids, 8, "ri", true);
+    Eigen::MatrixXf expected = estimate_gene_vectors_reference(count_matrix, 8, true);
+
+    ASSERT_EQ(actual.rows(), expected.rows());
+    ASSERT_EQ(actual.cols(), expected.cols());
+
+    float denom = std::max(1e-6f, expected.norm());
+    float rel_diff = (actual - expected).norm() / denom;
+    EXPECT_LT(rel_diff, 1e-4f);
+}
+
+TEST(NeighborhoodComposition, EstimateGeneVectorsMatchesReferencePerGene) {
+    Eigen::SparseMatrix<float> count_matrix = make_random_count_matrix(48, 180, 12, 456);
+    std::vector<int> gene_ids(count_matrix.cols(), 1);
+
+    Eigen::MatrixXf actual = baysor::estimate_gene_vectors(count_matrix, gene_ids, 6, "ri", false);
+    Eigen::MatrixXf expected = estimate_gene_vectors_reference(count_matrix, 6, false);
+
+    ASSERT_EQ(actual.rows(), expected.rows());
+    ASSERT_EQ(actual.cols(), expected.cols());
+
+    float denom = std::max(1e-6f, expected.norm());
+    float rel_diff = (actual - expected).norm() / denom;
+    EXPECT_LT(rel_diff, 1e-4f);
 }

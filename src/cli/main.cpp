@@ -124,6 +124,7 @@ int cmd_run(
         auto logger = std::make_shared<spdlog::logger>(
                           "baysor", spdlog::sinks_init_list{console_sink, file_sink});
         logger->set_level(spdlog::level::info);
+        logger->flush_on(spdlog::level::info);
         spdlog::set_default_logger(logger);
     }
 

@@ -9,6 +9,100 @@
 
 namespace baysor {
 
+namespace {
+
+Eigen::MatrixXf dense_times_sparse(
+    const Eigen::MatrixXf& left,
+    const Eigen::SparseMatrix<float>& right
+) {
+    const int n_components = static_cast<int>(left.rows());
+    const int n_cols = static_cast<int>(right.cols());
+    Eigen::MatrixXf out = Eigen::MatrixXf::Zero(n_components, n_cols);
+
+    #pragma omp parallel for schedule(dynamic, 256)
+    for (int col = 0; col < n_cols; ++col) {
+        auto out_col = out.col(col);
+        for (Eigen::SparseMatrix<float>::InnerIterator it(right, col); it; ++it) {
+            out_col.noalias() += it.value() * left.col(it.row());
+        }
+    }
+    return out;
+}
+
+Eigen::MatrixXf dense_times_sparse_transpose(
+    const Eigen::MatrixXf& left,
+    const Eigen::SparseMatrix<float>& right
+) {
+    const int n_components = static_cast<int>(left.rows());
+    const int n_rows = static_cast<int>(right.rows());
+    const int n_cols = static_cast<int>(right.cols());
+
+    const int n_threads = omp_get_max_threads();
+    std::vector<Eigen::MatrixXf> locals(
+        n_threads, Eigen::MatrixXf::Zero(n_components, n_rows)
+    );
+
+    #pragma omp parallel for schedule(dynamic, 256)
+    for (int col = 0; col < n_cols; ++col) {
+        int tid = omp_get_thread_num();
+        auto left_col = left.col(col);
+        auto& local = locals[tid];
+        for (Eigen::SparseMatrix<float>::InnerIterator it(right, col); it; ++it) {
+            local.col(it.row()).noalias() += it.value() * left_col;
+        }
+    }
+
+    Eigen::MatrixXf out = Eigen::MatrixXf::Zero(n_components, n_rows);
+    for (const auto& local : locals) out += local;
+    return out;
+}
+
+void compute_diag_and_total_var(
+    const Eigen::SparseMatrix<float>& count_matrix,
+    Eigen::VectorXf& diag_vals,
+    Eigen::VectorXf& total_var
+) {
+    const int n_genes = static_cast<int>(count_matrix.rows());
+    const int n_mols = static_cast<int>(count_matrix.cols());
+
+    std::vector<float> col_sums(n_mols, 0.0f);
+    #pragma omp parallel for schedule(dynamic, 256)
+    for (int col = 0; col < n_mols; ++col) {
+        float sum = 0.0f;
+        for (Eigen::SparseMatrix<float>::InnerIterator it(count_matrix, col); it; ++it) {
+            sum += it.value();
+        }
+        col_sums[col] = sum;
+    }
+
+    const int n_threads = omp_get_max_threads();
+    std::vector<Eigen::VectorXf> diag_locals(n_threads, Eigen::VectorXf::Zero(n_genes));
+    std::vector<Eigen::VectorXf> total_locals(n_threads, Eigen::VectorXf::Zero(n_genes));
+
+    #pragma omp parallel for schedule(dynamic, 256)
+    for (int col = 0; col < n_mols; ++col) {
+        int tid = omp_get_thread_num();
+        auto& diag_local = diag_locals[tid];
+        auto& total_local = total_locals[tid];
+        const float col_sum = col_sums[col];
+        for (Eigen::SparseMatrix<float>::InnerIterator it(count_matrix, col); it; ++it) {
+            const int row = it.row();
+            const float value = it.value();
+            diag_local(row) += value * value;
+            total_local(row) += value * col_sum;
+        }
+    }
+
+    diag_vals = Eigen::VectorXf::Zero(n_genes);
+    total_var = Eigen::VectorXf::Zero(n_genes);
+    for (int t = 0; t < n_threads; ++t) {
+        diag_vals += diag_locals[t];
+        total_var += total_locals[t];
+    }
+}
+
+} // namespace
+
 // ============================================================================
 // neighborhood_count_matrix
 // ============================================================================
@@ -115,30 +209,33 @@ Eigen::MatrixXf estimate_gene_vectors(
 ) {
     int n_genes = static_cast<int>(count_matrix.rows());
     int n_mols = static_cast<int>(count_matrix.cols());
+    (void)gene_ids;
+    (void)method;
 
     if (n_genes == 0 || n_mols == 0) return Eigen::MatrixXf();
 
-    // Random projection matrix: n_genes x n_components (float, matches count_matrix)
+    // Random projection matrix, stored as components x genes so dense_times_sparse
+    // can work column-wise against the sparse count matrix.
     std::mt19937 rng(42);
     std::normal_distribution<float> normal(0.0f, 1.0f);
-    Eigen::MatrixXf random_vectors(n_genes, n_components);
+    Eigen::MatrixXf random_vectors_t(n_components, n_genes);
     for (int i = 0; i < n_genes; ++i)
         for (int j = 0; j < n_components; ++j)
-            random_vectors(i, j) = normal(rng);
+            random_vectors_t(j, i) = normal(rng);
 
-    // Co-expression matrix: sparse(84xN) * sparse(84xN)^T → sparse(84x84)
-    // Materialize to dense immediately since it's small (n_genes x n_genes).
-    // count_matrix stays SparseMatrix<float> — no dense copy is made.
-    Eigen::SparseMatrix<float> coexpr_sp = count_matrix * count_matrix.transpose();
-    Eigen::MatrixXf coexpr(coexpr_sp);  // 84×84 dense, cheap
+    // Avoid explicitly forming coexpr = count_matrix * count_matrix.transpose().
+    // We only need:
+    //   1. diag(coexpr)
+    //   2. row_sums(coexpr)
+    //   3. coexpr * random_vectors
+    // All of those can be derived by streaming over sparse columns.
+    Eigen::VectorXf diag_vals;
+    Eigen::VectorXf total_var;
+    compute_diag_and_total_var(count_matrix, diag_vals, total_var);
 
-    // Variance clipping (var_clip=0.05): cap diagonal so highly self-correlated
-    // genes don't dominate (matches Julia's generate_randomized_gene_vectors).
     constexpr float var_clip = 0.05f;
+    Eigen::VectorXf clipped_diag = diag_vals;
     if (var_clip > 0 && n_genes > 1) {
-        Eigen::VectorXf diag_vals = coexpr.diagonal();
-        Eigen::VectorXf total_var = coexpr.rowwise().sum();
-
         std::vector<float> df_sorted(n_genes);
         for (int i = 0; i < n_genes; ++i)
             df_sorted[i] = (total_var(i) > 0) ? diag_vals(i) / total_var(i) : 0.0f;
@@ -146,23 +243,28 @@ Eigen::MatrixXf estimate_gene_vectors(
         float q = df_sorted[static_cast<int>((1.0f - var_clip) * (n_genes - 1))];
 
         for (int i = 0; i < n_genes; ++i)
-            coexpr(i, i) = std::min(q * total_var(i), diag_vals(i));
+            clipped_diag(i) = std::min(q * total_var(i), diag_vals(i));
     }
 
-    // Gene embedding: (coexpr * random_vectors) / row_sums — all 84×20, trivial
-    Eigen::VectorXf row_sums = coexpr.rowwise().sum();
-    Eigen::MatrixXf gene_emb = coexpr * random_vectors;
-    for (int i = 0; i < n_genes; ++i)
-        if (row_sums(i) > 0) gene_emb.row(i) /= row_sums(i);
+    Eigen::VectorXf delta = diag_vals - clipped_diag;
+    Eigen::VectorXf row_sums = total_var - delta;
+
+    // Unclipped coexpr * random_vectors = count_matrix * (count_matrix^T * random_vectors).
+    Eigen::MatrixXf proj_mol = dense_times_sparse(random_vectors_t, count_matrix); // k x n_mols
+    Eigen::MatrixXf gene_emb_t = dense_times_sparse_transpose(proj_mol, count_matrix); // k x n_genes
+
+    // Diagonal clipping only changes the diagonal of coexpr, so subtract the removed
+    // diagonal mass directly from each gene vector, then normalize by the clipped row sums.
+    for (int i = 0; i < n_genes; ++i) {
+        gene_emb_t.col(i).noalias() -= delta(i) * random_vectors_t.col(i);
+        if (row_sums(i) > 0) gene_emb_t.col(i) /= row_sums(i);
+    }
 
     if (per_molecule) {
-        // sparse(84xN)^T * dense(84x20) → dense(Nx20), then transpose to 20xN.
-        // Eigen dispatches to sparse_time_dense_product, iterating only nonzeros.
-        // count_matrix is never densified.
-        return (count_matrix.transpose() * gene_emb).transpose();
+        return dense_times_sparse(gene_emb_t, count_matrix);
     }
 
-    return gene_emb.transpose();  // n_components x n_genes
+    return gene_emb_t;  // n_components x n_genes
 }
 
 } // namespace baysor
