@@ -11,11 +11,22 @@ namespace baysor {
 enum class PriorSegType {
     None,       // no prior segmentation
     Column,     // column in the molecule file (prefixed with ':')
-    Image       // image file path (TIFF/PNG/MAT)
+    Image,      // image file path (TIFF/PNG/MAT)
+    Boundary    // boundary polygons in CSV/Parquet
 };
 
 /// Detect prior segmentation type from the input string
 PriorSegType detect_prior_seg_type(const std::string& prior_seg_arg);
+
+/// Parse prior segmentation from a column in the molecule file.
+/// The column values are strings or ints; unassigned_label marks unassigned molecules.
+/// Returns 0-based integer labels (0 = unassigned).
+/// Filters segments with fewer than min_molecules_per_segment molecules.
+std::vector<int> encode_prior_labels(
+    const std::vector<std::string>& raw_values,
+    const std::string& unassigned_label = "0",
+    int min_molecules_per_segment = 0
+);
 
 /// Parse prior segmentation from a column in the molecule file.
 /// The column values are strings or ints; unassigned_label marks unassigned molecules.

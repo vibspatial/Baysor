@@ -1,4 +1,5 @@
 #include "baysor/data_loading/data.h"
+#include "baysor/data_loading/prior_segmentation.h"
 #include "baysor/utils/general.h"
 
 #include <arrow/api.h>
@@ -11,6 +12,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <numeric>
 #include <regex>
 #include <set>
@@ -237,6 +239,268 @@ bool has_column(const std::shared_ptr<arrow::Table>& table, const std::string& n
     return table->schema()->GetFieldIndex(name) >= 0;
 }
 
+int find_column_index(const std::shared_ptr<arrow::Schema>& schema, const std::string& name) {
+    int idx = schema->GetFieldIndex(name);
+    if (idx < 0) {
+        throw std::runtime_error("Column '" + name + "' not found in the data. "
+                                 "Available columns: " + schema->ToString());
+    }
+    return idx;
+}
+
+bool has_column(const std::shared_ptr<arrow::Schema>& schema, const std::string& name) {
+    return schema->GetFieldIndex(name) >= 0;
+}
+
+std::shared_ptr<parquet::arrow::FileReader> open_parquet_reader(const std::string& path) {
+    auto input = arrow_unwrap(arrow::io::ReadableFile::Open(path));
+    parquet::arrow::FileReaderBuilder builder;
+    ARROW_CHECK_OK(builder.Open(input));
+    auto reader = arrow_unwrap(builder.Build());
+    reader->set_use_threads(true);
+    reader->set_batch_size(65536);
+    return reader;
+}
+
+std::shared_ptr<arrow::Schema> get_parquet_schema(
+    const std::shared_ptr<parquet::arrow::FileReader>& reader
+) {
+    std::shared_ptr<arrow::Schema> schema;
+    ARROW_CHECK_OK(reader->GetSchema(&schema));
+    return schema;
+}
+
+std::uint64_t array_length_or_zero(const std::shared_ptr<arrow::Array>& arr) {
+    return arr ? static_cast<std::uint64_t>(arr->length()) : 0;
+}
+
+double read_numeric_value(const std::shared_ptr<arrow::Array>& arr, int64_t i) {
+    if (!arr || arr->IsNull(i)) return std::numeric_limits<double>::quiet_NaN();
+
+    switch (arr->type_id()) {
+        case arrow::Type::DOUBLE:
+            return std::static_pointer_cast<arrow::DoubleArray>(arr)->Value(i);
+        case arrow::Type::FLOAT:
+            return static_cast<double>(std::static_pointer_cast<arrow::FloatArray>(arr)->Value(i));
+        case arrow::Type::INT64:
+            return static_cast<double>(std::static_pointer_cast<arrow::Int64Array>(arr)->Value(i));
+        case arrow::Type::INT32:
+            return static_cast<double>(std::static_pointer_cast<arrow::Int32Array>(arr)->Value(i));
+        case arrow::Type::INT16:
+            return static_cast<double>(std::static_pointer_cast<arrow::Int16Array>(arr)->Value(i));
+        case arrow::Type::INT8:
+            return static_cast<double>(std::static_pointer_cast<arrow::Int8Array>(arr)->Value(i));
+        case arrow::Type::UINT64:
+            return static_cast<double>(std::static_pointer_cast<arrow::UInt64Array>(arr)->Value(i));
+        case arrow::Type::UINT32:
+            return static_cast<double>(std::static_pointer_cast<arrow::UInt32Array>(arr)->Value(i));
+        case arrow::Type::UINT16:
+            return static_cast<double>(std::static_pointer_cast<arrow::UInt16Array>(arr)->Value(i));
+        case arrow::Type::UINT8:
+            return static_cast<double>(std::static_pointer_cast<arrow::UInt8Array>(arr)->Value(i));
+        default: {
+            auto scalar = arrow_unwrap(arr->GetScalar(i));
+            return std::stod(scalar->ToString());
+        }
+    }
+}
+
+std::string read_string_value(const std::shared_ptr<arrow::Array>& arr, int64_t i) {
+    if (!arr || arr->IsNull(i)) return "";
+
+    if (arr->type_id() == arrow::Type::STRING) {
+        return std::static_pointer_cast<arrow::StringArray>(arr)->GetString(i);
+    }
+    if (arr->type_id() == arrow::Type::LARGE_STRING) {
+        return std::static_pointer_cast<arrow::LargeStringArray>(arr)->GetString(i);
+    }
+    if (arr->type_id() == arrow::Type::DICTIONARY) {
+        auto dict_arr = std::static_pointer_cast<arrow::DictionaryArray>(arr);
+        auto dict = dict_arr->dictionary();
+        int64_t dict_idx = static_cast<int64_t>(read_numeric_value(dict_arr->indices(), i));
+        if (dict->type_id() == arrow::Type::STRING) {
+            return std::static_pointer_cast<arrow::StringArray>(dict)->GetString(dict_idx);
+        }
+        if (dict->type_id() == arrow::Type::LARGE_STRING) {
+            return std::static_pointer_cast<arrow::LargeStringArray>(dict)->GetString(dict_idx);
+        }
+    }
+
+    auto scalar = arrow_unwrap(arr->GetScalar(i));
+    return scalar->ToString();
+}
+
+std::vector<std::regex> compile_gene_patterns(const std::vector<std::string>& patterns) {
+    std::vector<std::regex> regexes;
+    regexes.reserve(patterns.size());
+    for (const auto& pat : patterns) {
+        std::string re_str;
+        for (char c : pat) {
+            switch (c) {
+                case '*': re_str += ".*"; break;
+                case '?': re_str += "."; break;
+                case '.': re_str += "\\."; break;
+                case '+': re_str += "\\+"; break;
+                case '(': re_str += "\\("; break;
+                case ')': re_str += "\\)"; break;
+                case '[': re_str += "\\["; break;
+                case ']': re_str += "\\]"; break;
+                case '{': re_str += "\\{"; break;
+                case '}': re_str += "\\}"; break;
+                case '^': re_str += "\\^"; break;
+                case '$': re_str += "\\$"; break;
+                case '|': re_str += "\\|"; break;
+                case '\\': re_str += "\\\\"; break;
+                default: re_str += c; break;
+            }
+        }
+        regexes.emplace_back(re_str, std::regex::ECMAScript);
+    }
+    return regexes;
+}
+
+bool matches_any_gene_pattern(const std::string& gene, const std::vector<std::regex>& regexes) {
+    for (const auto& re : regexes) {
+        if (std::regex_match(gene, re)) return true;
+    }
+    return false;
+}
+
+struct Pass1Summary {
+    std::vector<std::string> gene_names;
+    std::unordered_map<std::string, int> gene_id_map;
+    int64_t kept_rows = 0;
+};
+
+struct ParquetScanPlan {
+    int x = -1;
+    int y = -1;
+    int z = -1;
+    int gene = -1;
+    int qv = -1;
+    int prior = -1;
+    int confidence = -1;
+    int cluster = -1;
+    int nuclei_probs = -1;
+};
+
+bool row_passes_static_filters(
+    double x,
+    double y,
+    bool has_z,
+    double z,
+    bool has_qv,
+    double qv,
+    const DataOptions& opts
+) {
+    if (!std::isfinite(x) || !std::isfinite(y)) return false;
+    if (x < opts.x_min || x > opts.x_max) return false;
+    if (y < opts.y_min || y > opts.y_max) return false;
+    if (has_z) {
+        if (!std::isfinite(z)) return false;
+        if (z < opts.z_min || z > opts.z_max) return false;
+    }
+    if (has_qv && opts.min_qv >= 0.0) {
+        if (!std::isfinite(qv) || qv < opts.min_qv) return false;
+    }
+    return true;
+}
+
+ParquetScanPlan make_parquet_scan_plan(
+    const std::shared_ptr<arrow::Schema>& schema,
+    const DataOptions& opts,
+    const std::string& prior_column_name
+) {
+    ParquetScanPlan plan;
+    plan.x = find_column_index(schema, opts.x_col);
+    plan.y = find_column_index(schema, opts.y_col);
+    plan.gene = find_column_index(schema, opts.gene_col);
+    if (!opts.force_2d && has_column(schema, opts.z_col)) {
+        plan.z = find_column_index(schema, opts.z_col);
+    }
+    if (opts.min_qv >= 0.0) {
+        plan.qv = find_column_index(schema, opts.qv_col);
+    }
+    if (!prior_column_name.empty()) {
+        plan.prior = find_column_index(schema, prior_column_name);
+    }
+    if (has_column(schema, "confidence")) plan.confidence = find_column_index(schema, "confidence");
+    if (has_column(schema, "cluster")) plan.cluster = find_column_index(schema, "cluster");
+    if (has_column(schema, "nuclei_probs")) {
+        plan.nuclei_probs = find_column_index(schema, "nuclei_probs");
+    }
+    return plan;
+}
+
+std::vector<int> all_row_groups(const std::shared_ptr<parquet::arrow::FileReader>& reader) {
+    std::vector<int> groups(reader->num_row_groups());
+    std::iota(groups.begin(), groups.end(), 0);
+    return groups;
+}
+
+Pass1Summary scan_parquet_pass1(
+    const std::string& path,
+    const DataOptions& opts
+) {
+    auto reader = open_parquet_reader(path);
+    auto schema = get_parquet_schema(reader);
+    auto plan = make_parquet_scan_plan(schema, opts, "");
+
+    std::vector<int> projected = {plan.x, plan.y};
+    if (plan.z >= 0) projected.push_back(plan.z);
+    projected.push_back(plan.gene);
+    if (plan.qv >= 0) projected.push_back(plan.qv);
+
+    auto batch_reader = arrow_unwrap(reader->GetRecordBatchReader(all_row_groups(reader), projected));
+
+    std::unordered_map<std::string, int64_t> gene_counts;
+    std::shared_ptr<arrow::RecordBatch> batch;
+    while (true) {
+        ARROW_CHECK_OK(batch_reader->ReadNext(&batch));
+        if (!batch) break;
+
+        int col = 0;
+        auto x_arr = batch->column(col++);
+        auto y_arr = batch->column(col++);
+        std::shared_ptr<arrow::Array> z_arr;
+        if (plan.z >= 0) z_arr = batch->column(col++);
+        auto gene_arr = batch->column(col++);
+        std::shared_ptr<arrow::Array> qv_arr;
+        if (plan.qv >= 0) qv_arr = batch->column(col++);
+
+        for (int64_t i = 0; i < batch->num_rows(); ++i) {
+            double x = read_numeric_value(x_arr, i);
+            double y = read_numeric_value(y_arr, i);
+            double z = (plan.z >= 0) ? read_numeric_value(z_arr, i) : 0.0;
+            double qv = (plan.qv >= 0) ? read_numeric_value(qv_arr, i) : 0.0;
+            if (!row_passes_static_filters(x, y, plan.z >= 0, z, plan.qv >= 0, qv, opts)) {
+                continue;
+            }
+
+            auto gene = read_string_value(gene_arr, i);
+            if (gene.empty()) continue;
+            gene_counts[gene]++;
+        }
+    }
+
+    auto patterns = compile_gene_patterns(split_string_list(opts.exclude_genes));
+    Pass1Summary summary;
+    for (const auto& [gene, count] : gene_counts) {
+        if (count < opts.min_molecules_per_gene) continue;
+        if (matches_any_gene_pattern(gene, patterns)) continue;
+        summary.gene_names.push_back(gene);
+        summary.kept_rows += count;
+    }
+    std::sort(summary.gene_names.begin(), summary.gene_names.end());
+    summary.gene_names.erase(std::unique(summary.gene_names.begin(), summary.gene_names.end()),
+                             summary.gene_names.end());
+    summary.gene_id_map.reserve(summary.gene_names.size());
+    for (int i = 0; i < static_cast<int>(summary.gene_names.size()); ++i) {
+        summary.gene_id_map[summary.gene_names[i]] = i + 1;
+    }
+    return summary;
+}
+
 } // anonymous namespace
 
 // ============================================================================
@@ -456,6 +720,11 @@ std::vector<std::string> read_string_column(const std::string& path, const std::
     return extract_string_column(table, col_name);
 }
 
+std::vector<double> read_double_column(const std::string& path, const std::string& col_name) {
+    auto table = read_table(path);
+    return extract_double_column(table, col_name);
+}
+
 // ============================================================================
 // Main loading function
 // ============================================================================
@@ -496,8 +765,126 @@ RawTableData read_tabular_file(const std::string& path, const DataOptions& opts)
     return raw;
 }
 
-MoleculeData load_molecules(const std::string& path, const DataOptions& opts) {
+MoleculeData load_molecules(
+    const std::string& path,
+    const DataOptions& opts,
+    const std::string& prior_column_name,
+    const std::string& unassigned_prior_label,
+    int min_molecules_per_segment
+) {
     MoleculeData data;
+
+    std::string ext = file_extension(path);
+    if (ext == "parquet" || ext == "pq") {
+        auto pass1 = scan_parquet_pass1(path, opts);
+        data.gene_names = pass1.gene_names;
+
+        auto reader = open_parquet_reader(path);
+        auto schema = get_parquet_schema(reader);
+        auto plan = make_parquet_scan_plan(schema, opts, prior_column_name);
+
+        std::vector<int> projected = {plan.x, plan.y};
+        if (plan.z >= 0) projected.push_back(plan.z);
+        projected.push_back(plan.gene);
+        if (plan.qv >= 0) projected.push_back(plan.qv);
+        if (plan.prior >= 0) projected.push_back(plan.prior);
+        if (plan.confidence >= 0) projected.push_back(plan.confidence);
+        if (plan.cluster >= 0) projected.push_back(plan.cluster);
+        if (plan.nuclei_probs >= 0) projected.push_back(plan.nuclei_probs);
+
+        auto batch_reader = arrow_unwrap(reader->GetRecordBatchReader(all_row_groups(reader), projected));
+
+        data.x.resize(pass1.kept_rows);
+        data.y.resize(pass1.kept_rows);
+        data.gene.resize(pass1.kept_rows);
+        if (plan.z >= 0) data.z.resize(pass1.kept_rows);
+        if (plan.confidence >= 0) data.confidence.resize(pass1.kept_rows);
+        if (plan.cluster >= 0) data.cluster.resize(pass1.kept_rows);
+        if (plan.nuclei_probs >= 0) data.nuclei_probs.resize(pass1.kept_rows);
+
+        std::vector<std::string> prior_raw;
+        if (plan.prior >= 0) prior_raw.resize(pass1.kept_rows);
+
+        int64_t out_idx = 0;
+        std::shared_ptr<arrow::RecordBatch> batch;
+        while (true) {
+            ARROW_CHECK_OK(batch_reader->ReadNext(&batch));
+            if (!batch) break;
+
+            int col = 0;
+            auto x_arr = batch->column(col++);
+            auto y_arr = batch->column(col++);
+            std::shared_ptr<arrow::Array> z_arr;
+            if (plan.z >= 0) z_arr = batch->column(col++);
+            auto gene_arr = batch->column(col++);
+            std::shared_ptr<arrow::Array> qv_arr;
+            if (plan.qv >= 0) qv_arr = batch->column(col++);
+            std::shared_ptr<arrow::Array> prior_arr;
+            if (plan.prior >= 0) prior_arr = batch->column(col++);
+            std::shared_ptr<arrow::Array> confidence_arr;
+            if (plan.confidence >= 0) confidence_arr = batch->column(col++);
+            std::shared_ptr<arrow::Array> cluster_arr;
+            if (plan.cluster >= 0) cluster_arr = batch->column(col++);
+            std::shared_ptr<arrow::Array> nuclei_probs_arr;
+            if (plan.nuclei_probs >= 0) nuclei_probs_arr = batch->column(col++);
+
+            for (int64_t i = 0; i < batch->num_rows(); ++i) {
+                double x = read_numeric_value(x_arr, i);
+                double y = read_numeric_value(y_arr, i);
+                double z = (plan.z >= 0) ? read_numeric_value(z_arr, i) : 0.0;
+                double qv = (plan.qv >= 0) ? read_numeric_value(qv_arr, i) : 0.0;
+                if (!row_passes_static_filters(x, y, plan.z >= 0, z, plan.qv >= 0, qv, opts)) {
+                    continue;
+                }
+
+                auto gene = read_string_value(gene_arr, i);
+                auto it = pass1.gene_id_map.find(gene);
+                if (it == pass1.gene_id_map.end()) continue;
+
+                data.x[out_idx] = x;
+                data.y[out_idx] = y;
+                if (plan.z >= 0) data.z[out_idx] = z;
+                data.gene[out_idx] = it->second;
+                if (plan.prior >= 0) prior_raw[out_idx] = read_string_value(prior_arr, i);
+                if (plan.confidence >= 0) {
+                    data.confidence[out_idx] = read_numeric_value(confidence_arr, i);
+                }
+                if (plan.cluster >= 0) {
+                    data.cluster[out_idx] = static_cast<int>(std::round(
+                        read_numeric_value(cluster_arr, i)));
+                }
+                if (plan.nuclei_probs >= 0) {
+                    data.nuclei_probs[out_idx] = read_numeric_value(nuclei_probs_arr, i);
+                }
+                ++out_idx;
+            }
+        }
+
+        data.x.resize(out_idx);
+        data.y.resize(out_idx);
+        data.gene.resize(out_idx);
+        if (!data.z.empty()) data.z.resize(out_idx);
+        if (!data.confidence.empty()) data.confidence.resize(out_idx);
+        if (!data.cluster.empty()) data.cluster.resize(out_idx);
+        if (!data.nuclei_probs.empty()) data.nuclei_probs.resize(out_idx);
+
+        if (!data.z.empty()) {
+            bool all_same = true;
+            double z0 = data.z.front();
+            for (size_t i = 1; i < data.z.size(); ++i) {
+                if (data.z[i] != z0) { all_same = false; break; }
+            }
+            if (all_same) data.z.clear();
+        }
+
+        if (!prior_raw.empty()) {
+            prior_raw.resize(out_idx);
+            data.prior_segmentation = encode_prior_labels(
+                prior_raw, unassigned_prior_label, min_molecules_per_segment);
+        }
+
+        return data;
+    }
 
     // Read the full table once (shared with optional column extraction below)
     auto table = read_table(path);
@@ -522,9 +909,8 @@ MoleculeData load_molecules(const std::string& path, const DataOptions& opts) {
         }
     }
 
-    // Extract gene column and encode
+    // Extract gene column
     auto gene_strings = extract_string_column(table, opts.gene_col);
-    encode_genes(data, gene_strings);
 
     // Load optional metadata columns (if present in the input file)
     if (has_column(table, "confidence")) {
@@ -540,6 +926,63 @@ MoleculeData load_molecules(const std::string& path, const DataOptions& opts) {
     }
     if (has_column(table, "nuclei_probs")) {
         data.nuclei_probs = extract_double_column(table, "nuclei_probs");
+    }
+    std::vector<double> qv_values;
+    if (opts.min_qv >= 0.0) {
+        qv_values = extract_double_column(table, opts.qv_col);
+    }
+    std::vector<std::string> prior_raw;
+    if (!prior_column_name.empty()) {
+        prior_raw = extract_string_column(table, prior_column_name);
+    }
+
+    // Apply static row filters before gene encoding / gene-count filtering.
+    std::vector<int> keep_indices;
+    keep_indices.reserve(data.x.size());
+    bool has_z = !data.z.empty();
+    bool has_qv = !qv_values.empty();
+    for (int i = 0; i < data.n_molecules(); ++i) {
+        double z = has_z ? data.z[i] : 0.0;
+        double qv = has_qv ? qv_values[i] : 0.0;
+        if (row_passes_static_filters(data.x[i], data.y[i], has_z, z, has_qv, qv, opts)) {
+            keep_indices.push_back(i);
+        }
+    }
+
+    auto compact = [&](auto& vec) {
+        if (vec.empty()) return;
+        using T = typename std::decay<decltype(vec)>::type;
+        T new_vec;
+        new_vec.reserve(keep_indices.size());
+        for (int idx : keep_indices) new_vec.push_back(std::move(vec[idx]));
+        vec = std::move(new_vec);
+    };
+
+    compact(data.x);
+    compact(data.y);
+    compact(data.z);
+    compact(data.confidence);
+    compact(data.cluster);
+    compact(data.nuclei_probs);
+    compact(gene_strings);
+    compact(prior_raw);
+
+    // Drop z if only 1 unique value after filtering
+    if (!data.z.empty()) {
+        double z0 = data.z.front();
+        bool all_same = true;
+        for (size_t i = 1; i < data.z.size(); ++i) {
+            if (data.z[i] != z0) { all_same = false; break; }
+        }
+        if (all_same) data.z.clear();
+    }
+
+    // Encode genes on the filtered set
+    encode_genes(data, gene_strings);
+
+    if (!prior_raw.empty()) {
+        data.prior_segmentation = encode_prior_labels(
+            prior_raw, unassigned_prior_label, min_molecules_per_segment);
     }
 
     // Filter genes with too few molecules

@@ -182,6 +182,7 @@ RunOptions load_config(const std::string& path) {
         opts.data.y_col = toml_get(sec, "y", opts.data.y_col);
         opts.data.z_col = toml_get(sec, "z", opts.data.z_col);
         opts.data.gene_col = toml_get(sec, "gene", opts.data.gene_col);
+        opts.data.qv_col = toml_get(sec, "qv", opts.data.qv_col);
         opts.data.force_2d = toml_get_bool(sec, "force_2d", opts.data.force_2d);
         opts.data.min_molecules_per_gene = toml_get_int(sec, "min_molecules_per_gene",
                                                          opts.data.min_molecules_per_gene);
@@ -192,6 +193,13 @@ RunOptions load_config(const std::string& path) {
                                                             opts.data.min_molecules_per_segment);
         opts.data.confidence_nn_id = toml_get_int(sec, "confidence_nn_id",
                                                    opts.data.confidence_nn_id);
+        opts.data.min_qv = toml_get_double(sec, "min_qv", opts.data.min_qv);
+        opts.data.x_min = toml_get_double(sec, "x_min", opts.data.x_min);
+        opts.data.x_max = toml_get_double(sec, "x_max", opts.data.x_max);
+        opts.data.y_min = toml_get_double(sec, "y_min", opts.data.y_min);
+        opts.data.y_max = toml_get_double(sec, "y_max", opts.data.y_max);
+        opts.data.z_min = toml_get_double(sec, "z_min", opts.data.z_min);
+        opts.data.z_max = toml_get_double(sec, "z_max", opts.data.z_max);
     }
 
     // [segmentation]
@@ -248,12 +256,20 @@ void save_params_toml(const RunOptions& opts, const std::string& cli_cmd,
     f << "y = \"" << opts.data.y_col << "\"\n";
     f << "z = \"" << opts.data.z_col << "\"\n";
     f << "gene = \"" << opts.data.gene_col << "\"\n";
+    f << "qv = \"" << opts.data.qv_col << "\"\n";
     f << "force_2d = " << (opts.data.force_2d ? "true" : "false") << "\n";
     f << "min_molecules_per_gene = " << opts.data.min_molecules_per_gene << "\n";
     f << "exclude_genes = \"" << opts.data.exclude_genes << "\"\n";
     f << "min_molecules_per_cell = " << opts.data.min_molecules_per_cell << "\n";
     f << "min_molecules_per_segment = " << opts.data.min_molecules_per_segment << "\n";
     f << "confidence_nn_id = " << opts.data.confidence_nn_id << "\n";
+    f << "min_qv = " << opts.data.min_qv << "\n";
+    f << "x_min = " << opts.data.x_min << "\n";
+    f << "x_max = " << opts.data.x_max << "\n";
+    f << "y_min = " << opts.data.y_min << "\n";
+    f << "y_max = " << opts.data.y_max << "\n";
+    f << "z_min = " << opts.data.z_min << "\n";
+    f << "z_max = " << opts.data.z_max << "\n";
 
     f << "\n[segmentation]\n";
     f << "scale = " << opts.segmentation.scale << "\n";

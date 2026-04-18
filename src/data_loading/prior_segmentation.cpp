@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <set>
 #include <spdlog/spdlog.h>
 #include <stdexcept>
@@ -13,6 +14,158 @@
 
 namespace baysor {
 
+namespace {
+
+std::string file_extension_lower(const std::string& path) {
+    auto dot = path.rfind('.');
+    if (dot == std::string::npos) return "";
+    std::string ext = path.substr(dot + 1);
+    std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+    return ext;
+}
+
+struct BoundaryPolygon {
+    int label = 0;
+    std::vector<double> xs;
+    std::vector<double> ys;
+    double min_x = 0.0;
+    double max_x = 0.0;
+    double min_y = 0.0;
+    double max_y = 0.0;
+    double bbox_area = 0.0;
+};
+
+bool point_in_polygon(const BoundaryPolygon& poly, double x, double y) {
+    bool inside = false;
+    int n = static_cast<int>(poly.xs.size());
+    if (n < 3) return false;
+    for (int i = 0, j = n - 1; i < n; j = i++) {
+        double xi = poly.xs[i], yi = poly.ys[i];
+        double xj = poly.xs[j], yj = poly.ys[j];
+        bool intersects = ((yi > y) != (yj > y)) &&
+            (x < (xj - xi) * (y - yi) / ((yj - yi) + 1e-30) + xi);
+        if (intersects) inside = !inside;
+    }
+    return inside;
+}
+
+std::vector<BoundaryPolygon> load_boundary_polygons(const std::string& path) {
+    std::vector<double> vx = read_double_column(path, "vertex_x");
+    std::vector<double> vy = read_double_column(path, "vertex_y");
+    std::vector<int> labels;
+
+    try {
+        auto label_d = read_double_column(path, "label_id");
+        labels.resize(label_d.size());
+        for (size_t i = 0; i < label_d.size(); ++i) labels[i] = static_cast<int>(std::llround(label_d[i]));
+    } catch (...) {
+        labels = encode_prior_labels(read_string_column(path, "cell_id"), "");
+    }
+
+    if (vx.size() != vy.size() || vx.size() != labels.size()) {
+        throw std::runtime_error("Boundary file columns have inconsistent lengths: " + path);
+    }
+
+    std::unordered_map<int, int> poly_index;
+    std::vector<BoundaryPolygon> polygons;
+    polygons.reserve(labels.size() / 8);
+    for (size_t i = 0; i < labels.size(); ++i) {
+        int label = labels[i];
+        if (label <= 0) continue;
+        auto it = poly_index.find(label);
+        if (it == poly_index.end()) {
+            BoundaryPolygon poly;
+            poly.label = label;
+            poly.min_x = poly.max_x = vx[i];
+            poly.min_y = poly.max_y = vy[i];
+            polygons.push_back(std::move(poly));
+            it = poly_index.emplace(label, static_cast<int>(polygons.size()) - 1).first;
+        }
+        auto& poly = polygons[it->second];
+        poly.xs.push_back(vx[i]);
+        poly.ys.push_back(vy[i]);
+        poly.min_x = std::min(poly.min_x, vx[i]);
+        poly.max_x = std::max(poly.max_x, vx[i]);
+        poly.min_y = std::min(poly.min_y, vy[i]);
+        poly.max_y = std::max(poly.max_y, vy[i]);
+    }
+
+    for (auto& poly : polygons) {
+        poly.bbox_area = std::max(poly.max_x - poly.min_x, 0.0) *
+                         std::max(poly.max_y - poly.min_y, 0.0);
+    }
+    return polygons;
+}
+
+double choose_boundary_grid_size(const std::vector<BoundaryPolygon>& polygons) {
+    if (polygons.empty()) return 50.0;
+    std::vector<double> dims;
+    dims.reserve(polygons.size());
+    for (const auto& poly : polygons) {
+        dims.push_back(std::max(poly.max_x - poly.min_x, poly.max_y - poly.min_y));
+    }
+    std::sort(dims.begin(), dims.end());
+    double median = dims[dims.size() / 2];
+    return std::max(10.0, median * 2.0);
+}
+
+long long boundary_grid_key(int gx, int gy) {
+    return (static_cast<long long>(gx) << 32) ^ static_cast<unsigned int>(gy);
+}
+
+std::vector<int> assign_molecules_to_boundaries(
+    const std::vector<double>& mol_x,
+    const std::vector<double>& mol_y,
+    const std::vector<BoundaryPolygon>& polygons,
+    int min_molecules_per_segment
+) {
+    double grid = choose_boundary_grid_size(polygons);
+    std::unordered_map<long long, std::vector<int>> grid_index;
+    grid_index.reserve(polygons.size() * 2);
+
+    for (int pi = 0; pi < static_cast<int>(polygons.size()); ++pi) {
+        const auto& poly = polygons[pi];
+        int gx0 = static_cast<int>(std::floor(poly.min_x / grid));
+        int gx1 = static_cast<int>(std::floor(poly.max_x / grid));
+        int gy0 = static_cast<int>(std::floor(poly.min_y / grid));
+        int gy1 = static_cast<int>(std::floor(poly.max_y / grid));
+        for (int gx = gx0; gx <= gx1; ++gx) {
+            for (int gy = gy0; gy <= gy1; ++gy) {
+                grid_index[boundary_grid_key(gx, gy)].push_back(pi);
+            }
+        }
+    }
+
+    std::vector<int> labels(mol_x.size(), 0);
+    for (int i = 0; i < static_cast<int>(mol_x.size()); ++i) {
+        int gx = static_cast<int>(std::floor(mol_x[i] / grid));
+        int gy = static_cast<int>(std::floor(mol_y[i] / grid));
+        auto it = grid_index.find(boundary_grid_key(gx, gy));
+        if (it == grid_index.end()) continue;
+
+        int best_label = 0;
+        double best_area = std::numeric_limits<double>::infinity();
+        for (int pi : it->second) {
+            const auto& poly = polygons[pi];
+            if (mol_x[i] < poly.min_x || mol_x[i] > poly.max_x ||
+                mol_y[i] < poly.min_y || mol_y[i] > poly.max_y) {
+                continue;
+            }
+            if (!point_in_polygon(poly, mol_x[i], mol_y[i])) continue;
+            if (poly.bbox_area < best_area) {
+                best_area = poly.bbox_area;
+                best_label = poly.label;
+            }
+        }
+        labels[i] = best_label;
+    }
+
+    filter_segmentation_labels(labels, min_molecules_per_segment);
+    return labels;
+}
+
+} // anonymous namespace
+
 // ============================================================================
 // Detect prior segmentation type
 // ============================================================================
@@ -20,6 +173,8 @@ namespace baysor {
 PriorSegType detect_prior_seg_type(const std::string& prior_seg_arg) {
     if (prior_seg_arg.empty()) return PriorSegType::None;
     if (prior_seg_arg[0] == ':') return PriorSegType::Column;
+    std::string ext = file_extension_lower(prior_seg_arg);
+    if (ext == "csv" || ext == "parquet" || ext == "pq") return PriorSegType::Boundary;
     return PriorSegType::Image;
 }
 
@@ -54,14 +209,11 @@ void filter_segmentation_labels(std::vector<int>& labels, int min_molecules_per_
 // Parse prior segmentation from a column
 // ============================================================================
 
-std::vector<int> parse_prior_from_column(
-    const std::string& molecule_path,
-    const std::string& col_name,
+std::vector<int> encode_prior_labels(
+    const std::vector<std::string>& raw_values,
     const std::string& unassigned_label,
     int min_molecules_per_segment
 ) {
-    // Read the raw string values from the column
-    auto raw_values = read_string_column(molecule_path, col_name);
     int n = static_cast<int>(raw_values.size());
 
     // Encode labels: collect unique non-unassigned values, sort, assign 1-based IDs
@@ -99,13 +251,23 @@ std::vector<int> parse_prior_from_column(
                       unassigned_label);
     }
 
-    spdlog::info("Parsed {} prior segments from column '{}' ({} unassigned molecules)",
-                 sorted_labels.size(), col_name, n_unassigned);
+    spdlog::info("Parsed {} prior segments ({} unassigned molecules)",
+                 sorted_labels.size(), n_unassigned);
 
     // Filter small segments
     filter_segmentation_labels(result, min_molecules_per_segment);
 
     return result;
+}
+
+std::vector<int> parse_prior_from_column(
+    const std::string& molecule_path,
+    const std::string& col_name,
+    const std::string& unassigned_label,
+    int min_molecules_per_segment
+) {
+    auto raw_values = read_string_column(molecule_path, col_name);
+    return encode_prior_labels(raw_values, unassigned_label, min_molecules_per_segment);
 }
 
 // ============================================================================
@@ -566,12 +728,11 @@ std::pair<double, double> load_prior_segmentation(
     double scale = -1.0, scale_std = -1.0;
 
     if (seg_type == PriorSegType::Column) {
-        // Strip the leading ':'
-        std::string col_name = prior_seg_arg.substr(1);
-
-        data.prior_segmentation = parse_prior_from_column(
-            molecule_path, col_name, unassigned_label, min_molecules_per_segment
-        );
+        if (data.prior_segmentation.empty()) {
+            throw std::runtime_error(
+                "Prior segmentation column '" + prior_seg_arg.substr(1) +
+                "' was requested, but no prior labels were loaded from the molecule file");
+        }
 
         if (estimate_scale) {
             auto pos = data.position_matrix();
@@ -581,6 +742,24 @@ std::pair<double, double> load_prior_segmentation(
             scale_std = s_std;
             spdlog::info("Estimated scale from prior segmentation: {:.2f} (std: {:.2f})",
                          scale, scale_std);
+        }
+    } else if (seg_type == PriorSegType::Boundary) {
+        auto polygons = load_boundary_polygons(prior_seg_arg);
+        data.prior_segmentation = assign_molecules_to_boundaries(
+            data.x, data.y, polygons, min_molecules_per_segment);
+
+        if (estimate_scale) {
+            try {
+                auto pos = data.position_matrix();
+                auto [s, s_std] = estimate_scale_from_assignment(
+                    pos, data.prior_segmentation, min_molecules_per_cell);
+                scale = s;
+                scale_std = s_std;
+                spdlog::info("Estimated scale from prior segmentation: {:.2f} (std: {:.2f})",
+                             scale, scale_std);
+            } catch (const std::exception& e) {
+                spdlog::warn("Could not estimate scale from prior: {}", e.what());
+            }
         }
     } else {
         // Image-based

@@ -3,6 +3,7 @@ x = "x_location"
 y = "y_location"
 z = "z_location"
 gene = "feature_name"
+qv = "qv"
 min_molecules_per_gene = 10
 exclude_genes = "NegControl*,BLANK_*,antisense_*"
 min_molecules_per_cell = 50

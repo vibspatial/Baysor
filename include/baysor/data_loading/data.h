@@ -43,7 +43,13 @@ struct MoleculeData {
 /// Load molecule data from CSV or Parquet file.
 /// Handles column remapping, gene encoding, gene filtering, z-column handling.
 /// This is the main entry point for data loading.
-MoleculeData load_molecules(const std::string& path, const DataOptions& opts);
+MoleculeData load_molecules(
+    const std::string& path,
+    const DataOptions& opts,
+    const std::string& prior_column_name = "",
+    const std::string& unassigned_prior_label = "0",
+    int min_molecules_per_segment = 0
+);
 
 /// Internal: read a tabular file (CSV or Parquet) into raw column vectors.
 /// Returns columns as named vectors. Detects format by file extension.
@@ -71,5 +77,8 @@ void filter_genes_by_pattern(MoleculeData& data, const std::vector<std::string>&
 /// Read a string column from a CSV or Parquet file by name.
 /// Used for loading prior segmentation from a column in the molecule file.
 std::vector<std::string> read_string_column(const std::string& path, const std::string& col_name);
+
+/// Read a numeric column from a CSV or Parquet file by name.
+std::vector<double> read_double_column(const std::string& path, const std::string& col_name);
 
 } // namespace baysor

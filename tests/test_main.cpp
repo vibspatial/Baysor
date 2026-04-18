@@ -1,5 +1,7 @@
 #include <gtest/gtest.h>
 
+#include <arrow/api.h>
+#include <arrow/io/api.h>
 #include "baysor/data_loading/data.h"
 #include "baysor/data_loading/prior_segmentation.h"
 #include "baysor/utils/general.h"
@@ -28,6 +30,7 @@
 #include <unordered_map>
 #include <vector>
 #include <cstdio>
+#include <parquet/arrow/writer.h>
 #include <tiffio.h>
 
 // Helper: write a temp CSV file and return its path
@@ -41,6 +44,59 @@ static std::string write_temp_csv(const std::string& content, const std::string&
     std::ofstream f(path);
     f << content;
     f.close();
+    return path;
+}
+
+template <typename T>
+static T arrow_test_unwrap(arrow::Result<T>&& result) {
+    EXPECT_TRUE(result.ok()) << result.status().ToString();
+    return std::move(*result);
+}
+
+static void arrow_expect_ok(const arrow::Status& status) {
+    EXPECT_TRUE(status.ok()) << status.ToString();
+}
+
+static std::shared_ptr<arrow::Array> make_double_array(const std::vector<double>& values) {
+    arrow::DoubleBuilder builder;
+    arrow_expect_ok(builder.AppendValues(values));
+    return arrow_test_unwrap(builder.Finish());
+}
+
+static std::shared_ptr<arrow::Array> make_string_array(const std::vector<std::string>& values) {
+    arrow::StringBuilder builder;
+    for (const auto& v : values) arrow_expect_ok(builder.Append(v));
+    return arrow_test_unwrap(builder.Finish());
+}
+
+static std::shared_ptr<arrow::Array> make_int32_array(const std::vector<int32_t>& values) {
+    arrow::Int32Builder builder;
+    arrow_expect_ok(builder.AppendValues(values));
+    return arrow_test_unwrap(builder.Finish());
+}
+
+static std::string write_temp_parquet(
+    const std::vector<std::string>& names,
+    const std::vector<std::shared_ptr<arrow::Array>>& arrays,
+    int64_t row_group_size = 3
+) {
+    char tmpl[] = "/tmp/baysor_test_parquet_XXXXXX";
+    int fd = mkstemp(tmpl);
+    EXPECT_GE(fd, 0);
+    close(fd);
+    std::string path = std::string(tmpl) + ".parquet";
+    std::rename(tmpl, path.c_str());
+
+    std::vector<std::shared_ptr<arrow::Field>> fields;
+    for (size_t i = 0; i < names.size(); ++i) {
+        fields.push_back(arrow::field(names[i], arrays[i]->type()));
+    }
+
+    auto schema = arrow::schema(fields);
+    auto table = arrow::Table::Make(schema, arrays);
+    auto sink = arrow_test_unwrap(arrow::io::FileOutputStream::Open(path));
+    arrow_expect_ok(parquet::arrow::WriteTable(*table, arrow::default_memory_pool(), sink, row_group_size));
+    arrow_expect_ok(sink->Close());
     return path;
 }
 
@@ -760,6 +816,50 @@ TEST(DataLoading, LoadCSVWithExcludeGenes) {
     std::remove(path.c_str());
 }
 
+TEST(DataLoading, LoadParquetWithTwoPassFiltersAndPriorColumn) {
+    auto path = write_temp_parquet(
+        {"x_location", "y_location", "z_location", "feature_name", "cell_id", "qv"},
+        {
+            make_double_array({0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 100.0, 6.0}),
+            make_double_array({0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0}),
+            make_double_array({1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0}),
+            make_string_array({"GeneA", "GeneA", "GeneA", "GeneB", "GeneB", "NegControl1", "GeneA", "GeneC"}),
+            make_string_array({"cell1", "cell1", "cell1", "cell2", "UNASSIGNED", "cell3", "cell1", "cell4"}),
+            make_int32_array({30, 10, 30, 30, 30, 30, 30, 30})
+        },
+        /*row_group_size=*/3
+    );
+
+    baysor::DataOptions opts;
+    opts.x_col = "x_location";
+    opts.y_col = "y_location";
+    opts.z_col = "z_location";
+    opts.gene_col = "feature_name";
+    opts.qv_col = "qv";
+    opts.min_qv = 20.0;
+    opts.x_max = 10.0;
+    opts.min_molecules_per_gene = 2;
+    opts.exclude_genes = "NegControl*";
+
+    auto data = baysor::load_molecules(path, opts, "cell_id", "UNASSIGNED", 2);
+
+    EXPECT_EQ(data.n_molecules(), 4);
+    EXPECT_EQ(data.gene_names.size(), 2u);
+    EXPECT_EQ(data.gene_names[0], "GeneA");
+    EXPECT_EQ(data.gene_names[1], "GeneB");
+    EXPECT_EQ(data.gene, (std::vector<int>{1, 1, 2, 2}));
+    EXPECT_TRUE(data.z.empty());
+    EXPECT_EQ(data.prior_segmentation, (std::vector<int>{1, 1, 0, 0}));
+
+    std::remove(path.c_str());
+}
+
+TEST(PriorSegmentation, EncodePriorLabels) {
+    std::vector<std::string> labels = {"cell2", "cell1", "cell2", "UNASSIGNED", "cell1"};
+    auto encoded = baysor::encode_prior_labels(labels, "UNASSIGNED", 0);
+    EXPECT_EQ(encoded, (std::vector<int>{2, 1, 2, 0, 1}));
+}
+
 // ============================================================================
 // Prior segmentation
 // ============================================================================
@@ -768,6 +868,8 @@ TEST(PriorSegmentation, DetectType) {
     EXPECT_EQ(baysor::detect_prior_seg_type(""), baysor::PriorSegType::None);
     EXPECT_EQ(baysor::detect_prior_seg_type(":cell_id"), baysor::PriorSegType::Column);
     EXPECT_EQ(baysor::detect_prior_seg_type("/path/to/mask.tiff"), baysor::PriorSegType::Image);
+    EXPECT_EQ(baysor::detect_prior_seg_type("/path/to/boundaries.csv"), baysor::PriorSegType::Boundary);
+    EXPECT_EQ(baysor::detect_prior_seg_type("/path/to/boundaries.parquet"), baysor::PriorSegType::Boundary);
 }
 
 TEST(PriorSegmentation, FilterLabels) {
@@ -890,7 +992,7 @@ TEST(PriorSegmentation, LoadFromColumn) {
     );
 
     baysor::DataOptions opts;
-    auto data = baysor::load_molecules(path, opts);
+    auto data = baysor::load_molecules(path, opts, "cell_id", "0", 0);
 
     auto [scale, scale_std] = baysor::load_prior_segmentation(
         data, ":cell_id", path, "0", 0, 3, true);
@@ -900,6 +1002,44 @@ TEST(PriorSegmentation, LoadFromColumn) {
     EXPECT_GT(scale, 0.0);
 
     std::remove(path.c_str());
+}
+
+TEST(PriorSegmentation, LoadFromBoundaryCsv) {
+    auto coord_path = write_temp_csv(
+        "x,y,gene\n"
+        "1.0,1.0,A\n"
+        "2.0,2.0,A\n"
+        "4.0,4.0,A\n"
+        "11.0,1.0,B\n"
+        "12.0,2.0,B\n"
+        "14.0,4.0,B\n"
+        "8.0,2.0,C\n"
+    );
+
+    auto boundary_path = write_temp_csv(
+        "cell_id,vertex_x,vertex_y\n"
+        "cell1,0,0\n"
+        "cell1,0,5\n"
+        "cell1,5,5\n"
+        "cell1,5,0\n"
+        "cell2,10,0\n"
+        "cell2,10,5\n"
+        "cell2,15,5\n"
+        "cell2,15,0\n"
+    );
+
+    baysor::DataOptions opts;
+    auto data = baysor::load_molecules(coord_path, opts);
+
+    auto [scale, scale_std] = baysor::load_prior_segmentation(
+        data, boundary_path, coord_path, "0", 0, 2, false);
+
+    EXPECT_EQ(data.prior_segmentation, (std::vector<int>{1, 1, 1, 2, 2, 2, 0}));
+    EXPECT_LT(scale, 0.0);
+    EXPECT_LT(scale_std, 0.0);
+
+    std::remove(coord_path.c_str());
+    std::remove(boundary_path.c_str());
 }
 
 TEST(PriorSegmentation, LoadNone) {

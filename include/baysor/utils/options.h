@@ -2,6 +2,7 @@
 
 #include <string>
 #include <stdexcept>
+#include <limits>
 
 namespace baysor {
 
@@ -10,12 +11,20 @@ struct DataOptions {
     std::string y_col = "y";
     std::string z_col = "z";
     std::string gene_col = "gene";
+    std::string qv_col = "qv";
     bool force_2d = false;
     int min_molecules_per_gene = 1;
     std::string exclude_genes;       // comma-separated, supports regex (e.g. "Blank*,MALAT1")
     int min_molecules_per_cell = 0;
     int min_molecules_per_segment = 0;
     int confidence_nn_id = 0;
+    double min_qv = -1.0;
+    double x_min = -std::numeric_limits<double>::infinity();
+    double x_max =  std::numeric_limits<double>::infinity();
+    double y_min = -std::numeric_limits<double>::infinity();
+    double y_max =  std::numeric_limits<double>::infinity();
+    double z_min = -std::numeric_limits<double>::infinity();
+    double z_max =  std::numeric_limits<double>::infinity();
 };
 
 struct SegmentationOptions {
