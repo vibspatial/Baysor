@@ -153,6 +153,10 @@ target_link_libraries(baysor_lib PUBLIC
     knncolle::knncolle
 )
 
+if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+    target_compile_options(baysor_lib PRIVATE -Wno-stringop-overflow)
+endif()
+
 if(BAYSOR_WITH_CUDA)
     target_link_libraries(baysor_lib PUBLIC
         CUDA::cudart
@@ -167,6 +171,10 @@ add_executable(baysor
 
 target_link_libraries(baysor PRIVATE baysor_lib)
 
+if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+    target_compile_options(baysor PRIVATE -Wno-stringop-overflow)
+endif()
+
 # --- Tests ---
 if(BAYSOR_WITH_TESTS)
     enable_testing()
@@ -176,5 +184,8 @@ if(BAYSOR_WITH_TESTS)
         tests/test_main.cpp
     )
     target_link_libraries(baysor_tests PRIVATE baysor_lib GTest::gtest_main)
+    if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+        target_compile_options(baysor_tests PRIVATE -Wno-stringop-overflow)
+    endif()
     add_test(NAME baysor_tests COMMAND baysor_tests)
 endif()
