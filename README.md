@@ -18,6 +18,7 @@ The main CLI entrypoint is:
 
 Example datasets and runnable commands:
 
+- [Xenium pancreas](examples/Xenium_pancreas_membrane_377/README.md)
 - [ISS](examples/iss/README.md)
 - [osm-FISH](examples/osm-FISH/README.md)
 - [STARmap](examples/STARmap/README.md)
