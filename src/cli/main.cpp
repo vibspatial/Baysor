@@ -38,7 +38,6 @@ using namespace baysor;
 
 int cmd_run(
     const std::string& coordinates,
-    const std::string& prior_segmentation,
     RunOptions& opts,
     const std::string& output,
     bool plot,
@@ -49,38 +48,27 @@ int cmd_run(
 ) {
     spdlog::info("Loading data from '{}'...", coordinates);
 
-    fill_and_check_data_options(opts.data);
-
-    auto prior_type = detect_prior_seg_type(prior_segmentation);
-    std::string prior_column_name;
-    if (prior_type == PriorSegType::Column) {
-        prior_column_name = prior_segmentation.substr(1);
-    }
+    fill_and_check_molecule_input_options(opts.molecules);
+    fill_and_check_prior_input_options(opts.prior, opts.molecules.min_molecules_per_cell);
 
     auto data = load_molecules(
-        coordinates, opts.data, prior_column_name,
-        opts.segmentation.unassigned_prior_label,
-        opts.data.min_molecules_per_segment);
+        coordinates, opts.molecules, opts.prior);
     spdlog::info("Loaded {} transcripts, {} genes.", data.n_molecules(), data.n_genes());
 
-    fill_and_check_plotting_options(opts.plotting, opts.data.min_molecules_per_cell, data.n_genes());
+    fill_and_check_plotting_options(opts.plotting, opts.molecules.min_molecules_per_cell, data.n_genes());
 
     if (opts.segmentation.n_cells_init <= 0) {
         opts.segmentation.n_cells_init = default_param_value(
-            "n_cells_init", opts.data.min_molecules_per_cell, data.n_molecules());
+            "n_cells_init", opts.molecules.min_molecules_per_cell, data.n_molecules());
     }
 
     // Load prior segmentation if provided
-    if (!prior_segmentation.empty()) {
+    if (opts.prior.type != PriorInputType::None) {
         auto [scale, scale_std] = load_prior_segmentation(
-            data, prior_segmentation, coordinates,
-            opts.segmentation.unassigned_prior_label,
-            opts.data.min_molecules_per_segment,
-            opts.data.min_molecules_per_cell,
-            opts.segmentation.estimate_scale_from_centers
+            data, opts.prior, opts.molecules.min_molecules_per_cell
         );
 
-        if (opts.segmentation.estimate_scale_from_centers && scale > 0) {
+        if (opts.prior.estimate_scale_from_prior && scale > 0) {
             opts.segmentation.scale = scale;
             opts.segmentation.scale_std = std::to_string(scale_std);
         }
@@ -97,7 +85,7 @@ int cmd_run(
     double psc = opts.segmentation.prior_segmentation_confidence;
 
     spdlog::info("Estimating confidence...");
-    append_confidence(data, opts.data.confidence_nn_id, psc);
+    append_confidence(data, opts.molecules.confidence_nn_id, psc);
 
     // Build molecule adjacency graph (MRF)
     spdlog::info("Building molecule graph...");
@@ -129,7 +117,7 @@ int cmd_run(
         return 1;
     }
 
-    int min_mols     = opts.data.min_molecules_per_cell;
+    int min_mols     = opts.molecules.min_molecules_per_cell;
     int n_iters   = opts.segmentation.iters;
     double scale  = opts.segmentation.scale;
     int n_cells   = opts.segmentation.n_cells_init;
@@ -399,17 +387,17 @@ int cmd_preview(
 ) {
     spdlog::info("Loading data from '{}'...", coordinates);
 
-    fill_and_check_data_options(opts.data);
+    fill_and_check_molecule_input_options(opts.molecules);
 
-    auto data = load_molecules(coordinates, opts.data);
+    auto data = load_molecules(coordinates, opts.molecules);
     spdlog::info("Loaded {} transcripts, {} genes.", data.n_molecules(), data.n_genes());
 
-    fill_and_check_plotting_options(opts.plotting, opts.data.min_molecules_per_cell, data.n_genes());
+    fill_and_check_plotting_options(opts.plotting, opts.molecules.min_molecules_per_cell, data.n_genes());
 
     // Confidence estimation — done once; reuse knn, adj_list, and noise_result
     // everywhere below instead of recomputing them.
     spdlog::info("Estimating noise level...");
-    int nn_id = opts.data.confidence_nn_id;
+    int nn_id = opts.molecules.confidence_nn_id;
     if (nn_id <= 0) nn_id = std::max(data.n_genes() / 10, 10);
 
     auto pos = data.position_matrix();
@@ -480,14 +468,14 @@ int cmd_segfree(
 ) {
     spdlog::info("Loading data from '{}'...", coordinates);
 
-    fill_and_check_data_options(opts.data);
+    fill_and_check_molecule_input_options(opts.molecules);
 
-    auto data = load_molecules(coordinates, opts.data);
+    auto data = load_molecules(coordinates, opts.molecules);
     spdlog::info("Loaded {} transcripts, {} genes.", data.n_molecules(), data.n_genes());
 
     if (k_neighbors <= 0) {
         k_neighbors = default_param_value(
-            "composition_neighborhood", opts.data.min_molecules_per_cell, -1, data.n_genes());
+            "composition_neighborhood", opts.molecules.min_molecules_per_cell, -1, data.n_genes());
     }
     spdlog::info("Using k={} neighbors for NCV composition.", k_neighbors);
 
@@ -505,7 +493,7 @@ int cmd_segfree(
 
     // Per-molecule confidence (noise model)
     spdlog::info("Estimating molecule confidences...");
-    append_confidence(data, opts.data.confidence_nn_id);
+    append_confidence(data, opts.molecules.confidence_nn_id);
 
     // Gene vectors via randomized indexing, then UMAP color embedding
     spdlog::info("Estimating gene colors...");
@@ -582,17 +570,17 @@ int main(int argc, char* argv[]) {
 
     run->add_option("-c,--config", config_path,
         "TOML file with configuration");
-    run->add_option("-x,--x-column", opts.data.x_col,
+    run->add_option("-x,--x-column", opts.molecules.x_col,
         "Name of x column (default: x)");
-    run->add_option("-y,--y-column", opts.data.y_col,
+    run->add_option("-y,--y-column", opts.molecules.y_col,
         "Name of y column (default: y)");
-    run->add_option("-z,--z-column", opts.data.z_col,
+    run->add_option("-z,--z-column", opts.molecules.z_col,
         "Name of z column (default: z)");
-    run->add_option("-g,--gene-column", opts.data.gene_col,
+    run->add_option("-g,--gene-column", opts.molecules.gene_col,
         "Name of gene column (default: gene)");
-    run->add_option("--qv-column", opts.data.qv_col,
+    run->add_option("--qv-column", opts.molecules.qv_col,
         "Name of quality-value column used by --min-qv (default: qv)");
-    run->add_option("-m,--min-molecules-per-cell", opts.data.min_molecules_per_cell,
+    run->add_option("-m,--min-molecules-per-cell", opts.molecules.min_molecules_per_cell,
         "Minimal number of molecules for a cell to be considered as real");
     run->add_option("-s,--scale", opts.segmentation.scale,
         "Approximate cell radius. Sets estimate-scale-from-centers to false");
@@ -602,23 +590,23 @@ int main(int argc, char* argv[]) {
         "Number of molecule clusters / major cell types (default: 4)");
     run->add_option("--prior-segmentation-confidence", opts.segmentation.prior_segmentation_confidence,
         "Confidence of prior segmentation results, in [0,1] (default: 0.2)");
-    run->add_option("--min-molecules-per-gene", opts.data.min_molecules_per_gene,
+    run->add_option("--min-molecules-per-gene", opts.molecules.min_molecules_per_gene,
         "Minimal number of molecules per gene (default: 1)");
-    run->add_option("--exclude-genes", opts.data.exclude_genes,
+    run->add_option("--exclude-genes", opts.molecules.exclude_genes,
         "Comma-separated list of genes or patterns to exclude (e.g. 'Blank*,MALAT1')");
-    run->add_option("--min-qv", opts.data.min_qv,
+    run->add_option("--min-qv", opts.molecules.min_qv,
         "Drop molecules with qv below this threshold during input loading");
-    run->add_option("--x-min", opts.data.x_min,
+    run->add_option("--x-min", opts.molecules.x_min,
         "Minimum x coordinate to keep during input loading");
-    run->add_option("--x-max", opts.data.x_max,
+    run->add_option("--x-max", opts.molecules.x_max,
         "Maximum x coordinate to keep during input loading");
-    run->add_option("--y-min", opts.data.y_min,
+    run->add_option("--y-min", opts.molecules.y_min,
         "Minimum y coordinate to keep during input loading");
-    run->add_option("--y-max", opts.data.y_max,
+    run->add_option("--y-max", opts.molecules.y_max,
         "Maximum y coordinate to keep during input loading");
-    run->add_option("--z-min", opts.data.z_min,
+    run->add_option("--z-min", opts.molecules.z_min,
         "Minimum z coordinate to keep during input loading");
-    run->add_option("--z-max", opts.data.z_max,
+    run->add_option("--z-max", opts.molecules.z_max,
         "Maximum z coordinate to keep during input loading");
     run->add_option("--nuclei-genes", opts.segmentation.nuclei_genes,
         "Comma-separated list of nuclei-specific genes");
@@ -634,7 +622,7 @@ int main(int argc, char* argv[]) {
         "Save an HTML diagnostic plot");
     run->add_flag("--skip-ncv-color", run_skip_ncv_color,
         "Skip neighborhood composition color embedding to speed up development runs");
-    run->add_flag("--force-2d", opts.data.force_2d,
+    run->add_flag("--force-2d", opts.molecules.force_2d,
         "Ignore z-column in the data");
     run->add_option("--iters", opts.segmentation.iters,
         "Maximum number of algorithm iterations (default: 500)");
@@ -643,7 +631,7 @@ int main(int argc, char* argv[]) {
         "over 20 consecutive iterations. 0 = always run all --iters (default: 0.005)");
     run->add_option("--n-cells-init", opts.segmentation.n_cells_init,
         "Initial number of cells (default: auto)");
-    run->add_option("--unassigned-prior-label", opts.segmentation.unassigned_prior_label,
+    run->add_option("--unassigned-prior-label", opts.prior.unassigned_label,
         "Label for unassigned cells in prior segmentation (default: 0)");
 
     // ---- preview ----
@@ -657,35 +645,35 @@ int main(int argc, char* argv[]) {
         ->required();
     preview->add_option("-c,--config", config_path,
         "TOML file with configuration");
-    preview->add_option("-x,--x-column", opts.data.x_col,
+    preview->add_option("-x,--x-column", opts.molecules.x_col,
         "Name of x column (default: x)");
-    preview->add_option("-y,--y-column", opts.data.y_col,
+    preview->add_option("-y,--y-column", opts.molecules.y_col,
         "Name of y column (default: y)");
-    preview->add_option("-z,--z-column", opts.data.z_col,
+    preview->add_option("-z,--z-column", opts.molecules.z_col,
         "Name of z column (default: z)");
-    preview->add_option("-g,--gene-column", opts.data.gene_col,
+    preview->add_option("-g,--gene-column", opts.molecules.gene_col,
         "Name of gene column (default: gene)");
-    preview->add_option("--qv-column", opts.data.qv_col,
+    preview->add_option("--qv-column", opts.molecules.qv_col,
         "Name of quality-value column used by --min-qv (default: qv)");
-    preview->add_option("-m,--min-molecules-per-cell", opts.data.min_molecules_per_cell,
+    preview->add_option("-m,--min-molecules-per-cell", opts.molecules.min_molecules_per_cell,
         "Minimal number of molecules for a cell to be considered as real");
-    preview->add_option("--min-qv", opts.data.min_qv,
+    preview->add_option("--min-qv", opts.molecules.min_qv,
         "Drop molecules with qv below this threshold during input loading");
-    preview->add_option("--x-min", opts.data.x_min,
+    preview->add_option("--x-min", opts.molecules.x_min,
         "Minimum x coordinate to keep during input loading");
-    preview->add_option("--x-max", opts.data.x_max,
+    preview->add_option("--x-max", opts.molecules.x_max,
         "Maximum x coordinate to keep during input loading");
-    preview->add_option("--y-min", opts.data.y_min,
+    preview->add_option("--y-min", opts.molecules.y_min,
         "Minimum y coordinate to keep during input loading");
-    preview->add_option("--y-max", opts.data.y_max,
+    preview->add_option("--y-max", opts.molecules.y_max,
         "Maximum y coordinate to keep during input loading");
-    preview->add_option("--z-min", opts.data.z_min,
+    preview->add_option("--z-min", opts.molecules.z_min,
         "Minimum z coordinate to keep during input loading");
-    preview->add_option("--z-max", opts.data.z_max,
+    preview->add_option("--z-max", opts.molecules.z_max,
         "Maximum z coordinate to keep during input loading");
     preview->add_option("-o,--output", prev_output,
         "Output file or directory (default: preview.html)");
-    preview->add_flag("--force-2d", opts.data.force_2d,
+    preview->add_flag("--force-2d", opts.molecules.force_2d,
         "Ignore z-column in the data");
 
     // ---- segfree ----
@@ -700,37 +688,37 @@ int main(int argc, char* argv[]) {
         ->required();
     segfree->add_option("-c,--config", config_path,
         "TOML file with configuration");
-    segfree->add_option("-x,--x-column", opts.data.x_col,
+    segfree->add_option("-x,--x-column", opts.molecules.x_col,
         "Name of x column (default: x)");
-    segfree->add_option("-y,--y-column", opts.data.y_col,
+    segfree->add_option("-y,--y-column", opts.molecules.y_col,
         "Name of y column (default: y)");
-    segfree->add_option("-z,--z-column", opts.data.z_col,
+    segfree->add_option("-z,--z-column", opts.molecules.z_col,
         "Name of z column (default: z)");
-    segfree->add_option("-g,--gene-column", opts.data.gene_col,
+    segfree->add_option("-g,--gene-column", opts.molecules.gene_col,
         "Name of gene column (default: gene)");
-    segfree->add_option("--qv-column", opts.data.qv_col,
+    segfree->add_option("--qv-column", opts.molecules.qv_col,
         "Name of quality-value column used by --min-qv (default: qv)");
-    segfree->add_option("-m,--min-molecules-per-cell", opts.data.min_molecules_per_cell,
+    segfree->add_option("-m,--min-molecules-per-cell", opts.molecules.min_molecules_per_cell,
         "Minimal number of molecules for a cell to be considered as real");
-    segfree->add_option("--min-qv", opts.data.min_qv,
+    segfree->add_option("--min-qv", opts.molecules.min_qv,
         "Drop molecules with qv below this threshold during input loading");
-    segfree->add_option("--x-min", opts.data.x_min,
+    segfree->add_option("--x-min", opts.molecules.x_min,
         "Minimum x coordinate to keep during input loading");
-    segfree->add_option("--x-max", opts.data.x_max,
+    segfree->add_option("--x-max", opts.molecules.x_max,
         "Maximum x coordinate to keep during input loading");
-    segfree->add_option("--y-min", opts.data.y_min,
+    segfree->add_option("--y-min", opts.molecules.y_min,
         "Minimum y coordinate to keep during input loading");
-    segfree->add_option("--y-max", opts.data.y_max,
+    segfree->add_option("--y-max", opts.molecules.y_max,
         "Maximum y coordinate to keep during input loading");
-    segfree->add_option("--z-min", opts.data.z_min,
+    segfree->add_option("--z-min", opts.molecules.z_min,
         "Minimum z coordinate to keep during input loading");
-    segfree->add_option("--z-max", opts.data.z_max,
+    segfree->add_option("--z-max", opts.molecules.z_max,
         "Maximum z coordinate to keep during input loading");
     segfree->add_option("-k,--k-neighbors", sf_k_neighbors,
         "Number of neighbors for segmentation-free pseudo-cells (default: inferred)");
     segfree->add_option("-o,--output", sf_output,
         "Output file or directory (default: ncvs.loom)");
-    segfree->add_flag("--force-2d", opts.data.force_2d,
+    segfree->add_flag("--force-2d", opts.molecules.force_2d,
         "Ignore z-column in the data");
 
     // ---- Parse ----
@@ -745,14 +733,17 @@ int main(int argc, char* argv[]) {
 
     // Dispatch
     if (run->parsed()) {
-        if (opts.segmentation.scale > 0) {
-            opts.segmentation.estimate_scale_from_centers = false;
+        if (!run_prior_seg.empty()) {
+            opts.prior = parse_prior_input_spec(run_prior_seg);
         }
-        if (run_prior_seg.empty() && opts.segmentation.scale <= 0) {
+        if (opts.segmentation.scale > 0) {
+            opts.prior.estimate_scale_from_prior = false;
+        }
+        if (opts.prior.type == PriorInputType::None && opts.segmentation.scale <= 0) {
             spdlog::error("Either prior_segmentation or --scale must be provided.");
             return 1;
         }
-        return cmd_run(run_coordinates, run_prior_seg, opts, run_output,
+        return cmd_run(run_coordinates, opts, run_output,
                        run_plot, run_skip_ncv_color, run_polygon_format, run_count_format, cli_cmd);
     }
 

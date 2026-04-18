@@ -41,14 +41,13 @@ struct MoleculeData {
 };
 
 /// Load molecule data from CSV or Parquet file.
-/// Handles column remapping, gene encoding, gene filtering, z-column handling.
-/// This is the main entry point for data loading.
+/// Handles column remapping, read-time molecule filtering, gene encoding,
+/// optional fused prior-column loading, and z-column handling.
+/// This is the main entry point for transcript/molecule loading.
 MoleculeData load_molecules(
     const std::string& path,
-    const DataOptions& opts,
-    const std::string& prior_column_name = "",
-    const std::string& unassigned_prior_label = "0",
-    int min_molecules_per_segment = 0
+    const MoleculeInputOptions& opts,
+    const PriorInputOptions& prior_opts = PriorInputOptions{}
 );
 
 /// Internal: read a tabular file (CSV or Parquet) into raw column vectors.
@@ -56,10 +55,9 @@ MoleculeData load_molecules(
 struct RawTableData {
     std::vector<double> x, y, z;       // z may be empty
     std::vector<std::string> gene_str; // raw gene strings
-    // Prior segmentation column (if requested via :col_name syntax, loaded separately)
     bool has_z = false;
 };
-RawTableData read_tabular_file(const std::string& path, const DataOptions& opts);
+RawTableData read_tabular_file(const std::string& path, const MoleculeInputOptions& opts);
 
 /// Encode gene name strings to integer IDs (1-based).
 /// Sorts unique names alphabetically, assigns 1..N.

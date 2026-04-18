@@ -7,16 +7,9 @@
 
 namespace baysor {
 
-/// Determines the type of prior segmentation input
-enum class PriorSegType {
-    None,       // no prior segmentation
-    Column,     // column in the molecule file (prefixed with ':')
-    Image,      // image file path (TIFF/PNG/MAT)
-    Boundary    // boundary polygons in CSV/Parquet
-};
-
 /// Detect prior segmentation type from the input string
-PriorSegType detect_prior_seg_type(const std::string& prior_seg_arg);
+PriorInputType detect_prior_seg_type(const std::string& prior_seg_arg);
+PriorInputOptions parse_prior_input_spec(const std::string& prior_seg_arg);
 
 /// Parse prior segmentation from a column in the molecule file.
 /// The column values are strings or ints; unassigned_label marks unassigned molecules.
@@ -67,16 +60,12 @@ ImageSegResult load_prior_from_image(
 );
 
 /// Top-level: load prior segmentation into MoleculeData.
-/// Handles column-based and image-based priors.
+/// Handles column, image/mask, and boundary priors.
 /// Returns (scale, scale_std) if estimated from the prior, or (-1, -1) if not.
 std::pair<double, double> load_prior_segmentation(
     MoleculeData& data,
-    const std::string& prior_seg_arg,
-    const std::string& molecule_path,
-    const std::string& unassigned_label = "0",
-    int min_molecules_per_segment = 0,
-    int min_molecules_per_cell = 3,
-    bool estimate_scale = true
+    const PriorInputOptions& prior_opts,
+    int min_molecules_per_cell = 3
 );
 
 /// Filter segments with too few molecules. Zeros out labels for small segments.

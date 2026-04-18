@@ -674,7 +674,7 @@ TEST(DataLoading, LoadCSVBasic) {
         "5.0,6.0,A\n"
     );
 
-    baysor::DataOptions opts;
+    baysor::MoleculeInputOptions opts;
     auto data = baysor::load_molecules(path, opts);
 
     EXPECT_EQ(data.n_molecules(), 3);
@@ -693,7 +693,7 @@ TEST(DataLoading, LoadCSVWith3D) {
         "3.0,4.0,20.0,B\n"
     );
 
-    baysor::DataOptions opts;
+    baysor::MoleculeInputOptions opts;
     auto data = baysor::load_molecules(path, opts);
 
     EXPECT_TRUE(data.is_3d());
@@ -710,7 +710,7 @@ TEST(DataLoading, LoadCSVDropConstantZ) {
         "3.0,4.0,0.0,B\n"
     );
 
-    baysor::DataOptions opts;
+    baysor::MoleculeInputOptions opts;
     auto data = baysor::load_molecules(path, opts);
 
     // z is constant -> should be dropped
@@ -727,7 +727,7 @@ TEST(DataLoading, LoadCSVForce2D) {
         "3.0,4.0,20.0,B\n"
     );
 
-    baysor::DataOptions opts;
+    baysor::MoleculeInputOptions opts;
     opts.force_2d = true;
     auto data = baysor::load_molecules(path, opts);
 
@@ -744,7 +744,7 @@ TEST(DataLoading, LoadCSVWithConfidence) {
         "3.0,4.0,B,0.80\n"
     );
 
-    baysor::DataOptions opts;
+    baysor::MoleculeInputOptions opts;
     auto data = baysor::load_molecules(path, opts);
 
     ASSERT_EQ(data.confidence.size(), 2u);
@@ -761,7 +761,7 @@ TEST(DataLoading, LoadCSVCustomColumns) {
         "3.0,4.0,GeneB\n"
     );
 
-    baysor::DataOptions opts;
+    baysor::MoleculeInputOptions opts;
     opts.x_col = "pos_x";
     opts.y_col = "pos_y";
     opts.gene_col = "transcript";
@@ -786,7 +786,7 @@ TEST(DataLoading, LoadCSVWithGeneFilter) {
         "7.0,7.0,C\n"
     );
 
-    baysor::DataOptions opts;
+    baysor::MoleculeInputOptions opts;
     opts.min_molecules_per_gene = 3;
     auto data = baysor::load_molecules(path, opts);
 
@@ -806,7 +806,7 @@ TEST(DataLoading, LoadCSVWithExcludeGenes) {
         "4.0,4.0,GeneB\n"
     );
 
-    baysor::DataOptions opts;
+    baysor::MoleculeInputOptions opts;
     opts.exclude_genes = "Blank*";
     auto data = baysor::load_molecules(path, opts);
 
@@ -830,7 +830,7 @@ TEST(DataLoading, LoadParquetWithTwoPassFiltersAndPriorColumn) {
         /*row_group_size=*/3
     );
 
-    baysor::DataOptions opts;
+    baysor::MoleculeInputOptions opts;
     opts.x_col = "x_location";
     opts.y_col = "y_location";
     opts.z_col = "z_location";
@@ -841,7 +841,13 @@ TEST(DataLoading, LoadParquetWithTwoPassFiltersAndPriorColumn) {
     opts.min_molecules_per_gene = 2;
     opts.exclude_genes = "NegControl*";
 
-    auto data = baysor::load_molecules(path, opts, "cell_id", "UNASSIGNED", 2);
+    baysor::PriorInputOptions prior;
+    prior.type = baysor::PriorInputType::Column;
+    prior.column_name = "cell_id";
+    prior.unassigned_label = "UNASSIGNED";
+    prior.min_molecules_per_segment = 2;
+
+    auto data = baysor::load_molecules(path, opts, prior);
 
     EXPECT_EQ(data.n_molecules(), 4);
     EXPECT_EQ(data.gene_names.size(), 2u);
@@ -865,11 +871,11 @@ TEST(PriorSegmentation, EncodePriorLabels) {
 // ============================================================================
 
 TEST(PriorSegmentation, DetectType) {
-    EXPECT_EQ(baysor::detect_prior_seg_type(""), baysor::PriorSegType::None);
-    EXPECT_EQ(baysor::detect_prior_seg_type(":cell_id"), baysor::PriorSegType::Column);
-    EXPECT_EQ(baysor::detect_prior_seg_type("/path/to/mask.tiff"), baysor::PriorSegType::Image);
-    EXPECT_EQ(baysor::detect_prior_seg_type("/path/to/boundaries.csv"), baysor::PriorSegType::Boundary);
-    EXPECT_EQ(baysor::detect_prior_seg_type("/path/to/boundaries.parquet"), baysor::PriorSegType::Boundary);
+    EXPECT_EQ(baysor::detect_prior_seg_type(""), baysor::PriorInputType::None);
+    EXPECT_EQ(baysor::detect_prior_seg_type(":cell_id"), baysor::PriorInputType::Column);
+    EXPECT_EQ(baysor::detect_prior_seg_type("/path/to/mask.tiff"), baysor::PriorInputType::Image);
+    EXPECT_EQ(baysor::detect_prior_seg_type("/path/to/boundaries.csv"), baysor::PriorInputType::Boundary);
+    EXPECT_EQ(baysor::detect_prior_seg_type("/path/to/boundaries.parquet"), baysor::PriorInputType::Boundary);
 }
 
 TEST(PriorSegmentation, FilterLabels) {
@@ -991,11 +997,15 @@ TEST(PriorSegmentation, LoadFromColumn) {
         "22.0,22.0,A,cell3\n"
     );
 
-    baysor::DataOptions opts;
-    auto data = baysor::load_molecules(path, opts, "cell_id", "0", 0);
+    baysor::MoleculeInputOptions opts;
+    baysor::PriorInputOptions prior;
+    prior.type = baysor::PriorInputType::Column;
+    prior.column_name = "cell_id";
+
+    auto data = baysor::load_molecules(path, opts, prior);
 
     auto [scale, scale_std] = baysor::load_prior_segmentation(
-        data, ":cell_id", path, "0", 0, 3, true);
+        data, prior, 3);
 
     ASSERT_EQ(data.prior_segmentation.size(), 9u);
     EXPECT_GT(data.prior_segmentation[0], 0);  // assigned
@@ -1028,11 +1038,15 @@ TEST(PriorSegmentation, LoadFromBoundaryCsv) {
         "cell2,15,0\n"
     );
 
-    baysor::DataOptions opts;
+    baysor::MoleculeInputOptions opts;
     auto data = baysor::load_molecules(coord_path, opts);
 
+    baysor::PriorInputOptions prior;
+    prior.type = baysor::PriorInputType::Boundary;
+    prior.path = boundary_path;
+
     auto [scale, scale_std] = baysor::load_prior_segmentation(
-        data, boundary_path, coord_path, "0", 0, 2, false);
+        data, prior, 2);
 
     EXPECT_EQ(data.prior_segmentation, (std::vector<int>{1, 1, 1, 2, 2, 2, 0}));
     EXPECT_LT(scale, 0.0);
@@ -1048,7 +1062,7 @@ TEST(PriorSegmentation, LoadNone) {
     data.y = {1.0};
 
     auto [scale, scale_std] = baysor::load_prior_segmentation(
-        data, "", "dummy", "0", 0, 3, false);
+        data, baysor::PriorInputOptions{}, 3);
 
     EXPECT_DOUBLE_EQ(scale, -1.0);
     EXPECT_TRUE(data.prior_segmentation.empty());
@@ -1088,14 +1102,19 @@ TEST(PriorSegmentation, BinaryMaskScaleUsesFilteredComponentsOnly) {
         "15,10,A\n"
     );
 
-    baysor::DataOptions opts;
+    baysor::MoleculeInputOptions opts;
     opts.min_molecules_per_cell = 2;
-    baysor::fill_and_check_data_options(opts);
+    baysor::fill_and_check_molecule_input_options(opts);
     auto data = baysor::load_molecules(csv_path, opts);
 
+    baysor::PriorInputOptions prior;
+    prior.type = baysor::PriorInputType::Image;
+    prior.path = mask_path;
+    prior.min_molecules_per_segment = 2;
+    prior.estimate_scale_from_prior = true;
+
     auto [scale, scale_std] = baysor::load_prior_segmentation(
-        data, mask_path, csv_path, "0", /*min_molecules_per_segment=*/2,
-        /*min_molecules_per_cell=*/2, /*estimate_scale=*/true);
+        data, prior, /*min_molecules_per_cell=*/2);
 
     const double expected_radius = std::sqrt(4.0 / M_PI);
     EXPECT_NEAR(scale, expected_radius, 1e-6);
@@ -1127,14 +1146,19 @@ TEST(PriorSegmentation, LabeledMaskPreservesTouchingLabelsAndUsesLabelAreas) {
         "8,2,A\n"
     );
 
-    baysor::DataOptions opts;
+    baysor::MoleculeInputOptions opts;
     opts.min_molecules_per_cell = 2;
-    baysor::fill_and_check_data_options(opts);
+    baysor::fill_and_check_molecule_input_options(opts);
     auto data = baysor::load_molecules(csv_path, opts);
 
+    baysor::PriorInputOptions prior;
+    prior.type = baysor::PriorInputType::Image;
+    prior.path = mask_path;
+    prior.min_molecules_per_segment = 2;
+    prior.estimate_scale_from_prior = true;
+
     auto [scale, scale_std] = baysor::load_prior_segmentation(
-        data, mask_path, csv_path, "0", /*min_molecules_per_segment=*/2,
-        /*min_molecules_per_cell=*/2, /*estimate_scale=*/true);
+        data, prior, /*min_molecules_per_cell=*/2);
 
     const std::vector<int> expected_labels = {1, 1, 2, 2, 3, 3};
     EXPECT_EQ(data.prior_segmentation, expected_labels);
@@ -1164,20 +1188,29 @@ TEST(Options, DefaultParamValues) {
     EXPECT_EQ(baysor::default_param_value("n_cells_init", 10, 1000), 200);
 }
 
-TEST(Options, FillDataOptions) {
-    baysor::DataOptions opts;
-    opts.min_molecules_per_cell = 20;
-    baysor::fill_and_check_data_options(opts);
+TEST(Options, FillInputOptions) {
+    baysor::MoleculeInputOptions molecule_opts;
+    molecule_opts.min_molecules_per_cell = 20;
+    baysor::fill_and_check_molecule_input_options(molecule_opts);
 
-    EXPECT_GT(opts.min_molecules_per_segment, 0);
-    EXPECT_GT(opts.confidence_nn_id, 0);
+    baysor::PriorInputOptions prior_opts;
+    prior_opts.type = baysor::PriorInputType::Column;
+    prior_opts.column_name = "cell_id";
+    baysor::fill_and_check_prior_input_options(prior_opts, molecule_opts.min_molecules_per_cell);
+
+    EXPECT_GT(molecule_opts.confidence_nn_id, 0);
+    EXPECT_GT(prior_opts.min_molecules_per_segment, 0);
 }
 
 TEST(Options, LoadConfigFromToml) {
     auto path = write_temp_csv(
-        "[data]\n"
+        "[molecules]\n"
         "x = \"pos_x\"\n"
         "min_molecules_per_cell = 30\n"
+        "\n"
+        "[prior]\n"
+        "column_name = \"cell_id\"\n"
+        "unassigned_label = \"UNASSIGNED\"\n"
         "\n"
         "[segmentation]\n"
         "scale = 7.5\n"
@@ -1187,8 +1220,10 @@ TEST(Options, LoadConfigFromToml) {
 
     auto opts = baysor::load_config(path);
 
-    EXPECT_EQ(opts.data.x_col, "pos_x");
-    EXPECT_EQ(opts.data.min_molecules_per_cell, 30);
+    EXPECT_EQ(opts.molecules.x_col, "pos_x");
+    EXPECT_EQ(opts.molecules.min_molecules_per_cell, 30);
+    EXPECT_EQ(opts.prior.column_name, "cell_id");
+    EXPECT_EQ(opts.prior.unassigned_label, "UNASSIGNED");
     EXPECT_DOUBLE_EQ(opts.segmentation.scale, 7.5);
     EXPECT_EQ(opts.segmentation.n_clusters, 6);
 

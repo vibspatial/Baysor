@@ -391,7 +391,7 @@ bool row_passes_static_filters(
     double z,
     bool has_qv,
     double qv,
-    const DataOptions& opts
+    const MoleculeInputOptions& opts
 ) {
     if (!std::isfinite(x) || !std::isfinite(y)) return false;
     if (x < opts.x_min || x > opts.x_max) return false;
@@ -408,7 +408,7 @@ bool row_passes_static_filters(
 
 ParquetScanPlan make_parquet_scan_plan(
     const std::shared_ptr<arrow::Schema>& schema,
-    const DataOptions& opts,
+    const MoleculeInputOptions& opts,
     const std::string& prior_column_name
 ) {
     ParquetScanPlan plan;
@@ -440,7 +440,7 @@ std::vector<int> all_row_groups(const std::shared_ptr<parquet::arrow::FileReader
 
 Pass1Summary scan_parquet_pass1(
     const std::string& path,
-    const DataOptions& opts
+    const MoleculeInputOptions& opts
 ) {
     auto reader = open_parquet_reader(path);
     auto schema = get_parquet_schema(reader);
@@ -729,7 +729,7 @@ std::vector<double> read_double_column(const std::string& path, const std::strin
 // Main loading function
 // ============================================================================
 
-RawTableData read_tabular_file(const std::string& path, const DataOptions& opts) {
+RawTableData read_tabular_file(const std::string& path, const MoleculeInputOptions& opts) {
     auto table = read_table(path);
     RawTableData raw;
 
@@ -767,12 +767,12 @@ RawTableData read_tabular_file(const std::string& path, const DataOptions& opts)
 
 MoleculeData load_molecules(
     const std::string& path,
-    const DataOptions& opts,
-    const std::string& prior_column_name,
-    const std::string& unassigned_prior_label,
-    int min_molecules_per_segment
+    const MoleculeInputOptions& opts,
+    const PriorInputOptions& prior_opts
 ) {
     MoleculeData data;
+    const bool load_prior_column = prior_opts.type == PriorInputType::Column && !prior_opts.column_name.empty();
+    const std::string& prior_column_name = prior_opts.column_name;
 
     std::string ext = file_extension(path);
     if (ext == "parquet" || ext == "pq") {
@@ -781,7 +781,7 @@ MoleculeData load_molecules(
 
         auto reader = open_parquet_reader(path);
         auto schema = get_parquet_schema(reader);
-        auto plan = make_parquet_scan_plan(schema, opts, prior_column_name);
+        auto plan = make_parquet_scan_plan(schema, opts, load_prior_column ? prior_column_name : "");
 
         std::vector<int> projected = {plan.x, plan.y};
         if (plan.z >= 0) projected.push_back(plan.z);
@@ -877,10 +877,10 @@ MoleculeData load_molecules(
             if (all_same) data.z.clear();
         }
 
-        if (!prior_raw.empty()) {
+        if (load_prior_column && !prior_raw.empty()) {
             prior_raw.resize(out_idx);
             data.prior_segmentation = encode_prior_labels(
-                prior_raw, unassigned_prior_label, min_molecules_per_segment);
+                prior_raw, prior_opts.unassigned_label, prior_opts.min_molecules_per_segment);
         }
 
         return data;
@@ -932,7 +932,7 @@ MoleculeData load_molecules(
         qv_values = extract_double_column(table, opts.qv_col);
     }
     std::vector<std::string> prior_raw;
-    if (!prior_column_name.empty()) {
+    if (load_prior_column) {
         prior_raw = extract_string_column(table, prior_column_name);
     }
 
@@ -980,9 +980,9 @@ MoleculeData load_molecules(
     // Encode genes on the filtered set
     encode_genes(data, gene_strings);
 
-    if (!prior_raw.empty()) {
+    if (load_prior_column && !prior_raw.empty()) {
         data.prior_segmentation = encode_prior_labels(
-            prior_raw, unassigned_prior_label, min_molecules_per_segment);
+            prior_raw, prior_opts.unassigned_label, prior_opts.min_molecules_per_segment);
     }
 
     // Filter genes with too few molecules

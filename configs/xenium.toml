@@ -1,4 +1,4 @@
-[data]
+[molecules]
 x = "x_location"
 y = "y_location"
 z = "z_location"
@@ -8,8 +8,10 @@ min_molecules_per_gene = 10
 exclude_genes = "NegControl*,BLANK_*,antisense_*"
 min_molecules_per_cell = 50
 
+[prior]
+unassigned_label = "UNASSIGNED"
+
 [segmentation]
-unassigned_prior_label = "UNASSIGNED"
 prior_segmentation_confidence = 0.5
 
 [plotting]

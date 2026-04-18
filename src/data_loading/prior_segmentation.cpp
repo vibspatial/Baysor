@@ -170,12 +170,26 @@ std::vector<int> assign_molecules_to_boundaries(
 // Detect prior segmentation type
 // ============================================================================
 
-PriorSegType detect_prior_seg_type(const std::string& prior_seg_arg) {
-    if (prior_seg_arg.empty()) return PriorSegType::None;
-    if (prior_seg_arg[0] == ':') return PriorSegType::Column;
+PriorInputType detect_prior_seg_type(const std::string& prior_seg_arg) {
+    return parse_prior_input_spec(prior_seg_arg).type;
+}
+
+PriorInputOptions parse_prior_input_spec(const std::string& prior_seg_arg) {
+    PriorInputOptions opts;
+    if (prior_seg_arg.empty()) return opts;
+    if (prior_seg_arg[0] == ':') {
+        opts.type = PriorInputType::Column;
+        opts.column_name = prior_seg_arg.substr(1);
+        return opts;
+    }
     std::string ext = file_extension_lower(prior_seg_arg);
-    if (ext == "csv" || ext == "parquet" || ext == "pq") return PriorSegType::Boundary;
-    return PriorSegType::Image;
+    opts.path = prior_seg_arg;
+    if (ext == "csv" || ext == "parquet" || ext == "pq") {
+        opts.type = PriorInputType::Boundary;
+    } else {
+        opts.type = PriorInputType::Image;
+    }
+    return opts;
 }
 
 // ============================================================================
@@ -712,29 +726,25 @@ ImageSegResult load_prior_from_image(
 
 std::pair<double, double> load_prior_segmentation(
     MoleculeData& data,
-    const std::string& prior_seg_arg,
-    const std::string& molecule_path,
-    const std::string& unassigned_label,
-    int min_molecules_per_segment,
-    int min_molecules_per_cell,
-    bool estimate_scale
+    const PriorInputOptions& prior_opts,
+    int min_molecules_per_cell
 ) {
-    auto seg_type = detect_prior_seg_type(prior_seg_arg);
+    auto seg_type = prior_opts.type;
 
-    if (seg_type == PriorSegType::None) {
+    if (seg_type == PriorInputType::None) {
         return {-1.0, -1.0};
     }
 
     double scale = -1.0, scale_std = -1.0;
 
-    if (seg_type == PriorSegType::Column) {
+    if (seg_type == PriorInputType::Column) {
         if (data.prior_segmentation.empty()) {
             throw std::runtime_error(
-                "Prior segmentation column '" + prior_seg_arg.substr(1) +
+                "Prior segmentation column '" + prior_opts.column_name +
                 "' was requested, but no prior labels were loaded from the molecule file");
         }
 
-        if (estimate_scale) {
+        if (prior_opts.estimate_scale_from_prior) {
             auto pos = data.position_matrix();
             auto [s, s_std] = estimate_scale_from_assignment(
                 pos, data.prior_segmentation, min_molecules_per_cell);
@@ -743,12 +753,12 @@ std::pair<double, double> load_prior_segmentation(
             spdlog::info("Estimated scale from prior segmentation: {:.2f} (std: {:.2f})",
                          scale, scale_std);
         }
-    } else if (seg_type == PriorSegType::Boundary) {
-        auto polygons = load_boundary_polygons(prior_seg_arg);
+    } else if (seg_type == PriorInputType::Boundary) {
+        auto polygons = load_boundary_polygons(prior_opts.path);
         data.prior_segmentation = assign_molecules_to_boundaries(
-            data.x, data.y, polygons, min_molecules_per_segment);
+            data.x, data.y, polygons, prior_opts.min_molecules_per_segment);
 
-        if (estimate_scale) {
+        if (prior_opts.estimate_scale_from_prior) {
             try {
                 auto pos = data.position_matrix();
                 auto [s, s_std] = estimate_scale_from_assignment(
@@ -764,10 +774,10 @@ std::pair<double, double> load_prior_segmentation(
     } else {
         // Image-based
         auto result = load_prior_from_image(
-            prior_seg_arg, data.x, data.y, min_molecules_per_segment);
+            prior_opts.path, data.x, data.y, prior_opts.min_molecules_per_segment);
         data.prior_segmentation = std::move(result.segment_per_molecule);
 
-        if (estimate_scale) {
+        if (prior_opts.estimate_scale_from_prior) {
             try {
                 if (!result.component_pixel_areas.empty()) {
                     // Image prior: use sqrt(area/π) radii for both binary and labeled masks,

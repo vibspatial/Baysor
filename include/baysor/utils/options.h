@@ -6,7 +6,14 @@
 
 namespace baysor {
 
-struct DataOptions {
+enum class PriorInputType {
+    None,
+    Column,
+    Image,
+    Boundary
+};
+
+struct MoleculeInputOptions {
     std::string x_col = "x";
     std::string y_col = "y";
     std::string z_col = "z";
@@ -16,7 +23,6 @@ struct DataOptions {
     int min_molecules_per_gene = 1;
     std::string exclude_genes;       // comma-separated, supports regex (e.g. "Blank*,MALAT1")
     int min_molecules_per_cell = 0;
-    int min_molecules_per_segment = 0;
     int confidence_nn_id = 0;
     double min_qv = -1.0;
     double x_min = -std::numeric_limits<double>::infinity();
@@ -27,10 +33,18 @@ struct DataOptions {
     double z_max =  std::numeric_limits<double>::infinity();
 };
 
+struct PriorInputOptions {
+    PriorInputType type = PriorInputType::None;
+    std::string path;
+    std::string column_name;
+    std::string unassigned_label = "0";
+    int min_molecules_per_segment = 0;
+    bool estimate_scale_from_prior = true;
+};
+
 struct SegmentationOptions {
     double scale = -1.0;
     std::string scale_std = "25%";
-    bool estimate_scale_from_centers = true;
     int n_clusters = 4;
     double prior_segmentation_confidence = 0.2;
     int iters = 500;
@@ -38,7 +52,6 @@ struct SegmentationOptions {
     int n_cells_init = 0;
     std::string nuclei_genes;
     std::string cyto_genes;
-    std::string unassigned_prior_label = "0";
 };
 
 struct PlottingOptions {
@@ -49,7 +62,8 @@ struct PlottingOptions {
 };
 
 struct RunOptions {
-    DataOptions data;
+    MoleculeInputOptions molecules;
+    PriorInputOptions prior;
     SegmentationOptions segmentation;
     PlottingOptions plotting;
 };
@@ -63,7 +77,8 @@ int default_param_value(const std::string& param, int min_molecules_per_cell,
                         int n_molecules = -1, int n_genes = -1);
 
 /// Fill in zero-valued derived options from min_molecules_per_cell
-void fill_and_check_data_options(DataOptions& opts);
+void fill_and_check_molecule_input_options(MoleculeInputOptions& opts);
+void fill_and_check_prior_input_options(PriorInputOptions& opts, int min_molecules_per_cell);
 
 /// Fill plotting defaults
 void fill_and_check_plotting_options(PlottingOptions& opts, int min_molecules_per_cell,

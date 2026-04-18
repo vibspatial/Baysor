@@ -53,17 +53,27 @@ int default_param_value(const std::string& param, int min_molecules_per_cell,
     throw std::runtime_error("Unknown parameter: " + param);
 }
 
-void fill_and_check_data_options(DataOptions& opts) {
+void fill_and_check_molecule_input_options(MoleculeInputOptions& opts) {
     if (opts.min_molecules_per_cell <= 0) {
         throw std::runtime_error("'min_molecules_per_cell' must be positive");
-    }
-    if (opts.min_molecules_per_segment == 0) {
-        opts.min_molecules_per_segment = default_param_value("min_molecules_per_segment",
-                                                             opts.min_molecules_per_cell);
     }
     if (opts.confidence_nn_id == 0) {
         opts.confidence_nn_id = default_param_value("confidence_nn_id",
                                                      opts.min_molecules_per_cell);
+    }
+}
+
+void fill_and_check_prior_input_options(PriorInputOptions& opts, int min_molecules_per_cell) {
+    if (opts.type == PriorInputType::Column && opts.column_name.empty()) {
+        throw std::runtime_error("Prior column input requires a non-empty column_name");
+    }
+    if ((opts.type == PriorInputType::Image || opts.type == PriorInputType::Boundary) &&
+        opts.path.empty()) {
+        throw std::runtime_error("Prior image/boundary input requires a non-empty path");
+    }
+    if (opts.type != PriorInputType::None && opts.min_molecules_per_segment == 0) {
+        opts.min_molecules_per_segment = default_param_value(
+            "min_molecules_per_segment", min_molecules_per_cell);
     }
 }
 
@@ -175,31 +185,37 @@ RunOptions load_config(const std::string& path) {
 
     auto doc = parse_toml_simple(path);
 
-    // [data]
+    auto apply_molecule_section = [&](const TomlSection& sec) {
+        opts.molecules.x_col = toml_get(sec, "x", opts.molecules.x_col);
+        opts.molecules.y_col = toml_get(sec, "y", opts.molecules.y_col);
+        opts.molecules.z_col = toml_get(sec, "z", opts.molecules.z_col);
+        opts.molecules.gene_col = toml_get(sec, "gene", opts.molecules.gene_col);
+        opts.molecules.qv_col = toml_get(sec, "qv", opts.molecules.qv_col);
+        opts.molecules.force_2d = toml_get_bool(sec, "force_2d", opts.molecules.force_2d);
+        opts.molecules.min_molecules_per_gene = toml_get_int(
+            sec, "min_molecules_per_gene", opts.molecules.min_molecules_per_gene);
+        opts.molecules.exclude_genes = toml_get(sec, "exclude_genes", opts.molecules.exclude_genes);
+        opts.molecules.min_molecules_per_cell = toml_get_int(
+            sec, "min_molecules_per_cell", opts.molecules.min_molecules_per_cell);
+        opts.molecules.confidence_nn_id = toml_get_int(
+            sec, "confidence_nn_id", opts.molecules.confidence_nn_id);
+        opts.molecules.min_qv = toml_get_double(sec, "min_qv", opts.molecules.min_qv);
+        opts.molecules.x_min = toml_get_double(sec, "x_min", opts.molecules.x_min);
+        opts.molecules.x_max = toml_get_double(sec, "x_max", opts.molecules.x_max);
+        opts.molecules.y_min = toml_get_double(sec, "y_min", opts.molecules.y_min);
+        opts.molecules.y_max = toml_get_double(sec, "y_max", opts.molecules.y_max);
+        opts.molecules.z_min = toml_get_double(sec, "z_min", opts.molecules.z_min);
+        opts.molecules.z_max = toml_get_double(sec, "z_max", opts.molecules.z_max);
+        opts.prior.min_molecules_per_segment = toml_get_int(
+            sec, "min_molecules_per_segment", opts.prior.min_molecules_per_segment);
+    };
+
+    // [molecules] (preferred), [data] (backward compatible)
+    if (doc.count("molecules")) {
+        apply_molecule_section(doc["molecules"]);
+    }
     if (doc.count("data")) {
-        auto& sec = doc["data"];
-        opts.data.x_col = toml_get(sec, "x", opts.data.x_col);
-        opts.data.y_col = toml_get(sec, "y", opts.data.y_col);
-        opts.data.z_col = toml_get(sec, "z", opts.data.z_col);
-        opts.data.gene_col = toml_get(sec, "gene", opts.data.gene_col);
-        opts.data.qv_col = toml_get(sec, "qv", opts.data.qv_col);
-        opts.data.force_2d = toml_get_bool(sec, "force_2d", opts.data.force_2d);
-        opts.data.min_molecules_per_gene = toml_get_int(sec, "min_molecules_per_gene",
-                                                         opts.data.min_molecules_per_gene);
-        opts.data.exclude_genes = toml_get(sec, "exclude_genes", opts.data.exclude_genes);
-        opts.data.min_molecules_per_cell = toml_get_int(sec, "min_molecules_per_cell",
-                                                         opts.data.min_molecules_per_cell);
-        opts.data.min_molecules_per_segment = toml_get_int(sec, "min_molecules_per_segment",
-                                                            opts.data.min_molecules_per_segment);
-        opts.data.confidence_nn_id = toml_get_int(sec, "confidence_nn_id",
-                                                   opts.data.confidence_nn_id);
-        opts.data.min_qv = toml_get_double(sec, "min_qv", opts.data.min_qv);
-        opts.data.x_min = toml_get_double(sec, "x_min", opts.data.x_min);
-        opts.data.x_max = toml_get_double(sec, "x_max", opts.data.x_max);
-        opts.data.y_min = toml_get_double(sec, "y_min", opts.data.y_min);
-        opts.data.y_max = toml_get_double(sec, "y_max", opts.data.y_max);
-        opts.data.z_min = toml_get_double(sec, "z_min", opts.data.z_min);
-        opts.data.z_max = toml_get_double(sec, "z_max", opts.data.z_max);
+        apply_molecule_section(doc["data"]);
     }
 
     // [segmentation]
@@ -207,8 +223,6 @@ RunOptions load_config(const std::string& path) {
         auto& sec = doc["segmentation"];
         opts.segmentation.scale = toml_get_double(sec, "scale", opts.segmentation.scale);
         opts.segmentation.scale_std = toml_get(sec, "scale_std", opts.segmentation.scale_std);
-        opts.segmentation.estimate_scale_from_centers = toml_get_bool(
-            sec, "estimate_scale_from_centers", opts.segmentation.estimate_scale_from_centers);
         opts.segmentation.n_clusters = toml_get_int(sec, "n_clusters", opts.segmentation.n_clusters);
         opts.segmentation.prior_segmentation_confidence = toml_get_double(
             sec, "prior_segmentation_confidence", opts.segmentation.prior_segmentation_confidence);
@@ -217,8 +231,30 @@ RunOptions load_config(const std::string& path) {
         opts.segmentation.n_cells_init = toml_get_int(sec, "n_cells_init", opts.segmentation.n_cells_init);
         opts.segmentation.nuclei_genes = toml_get(sec, "nuclei_genes", opts.segmentation.nuclei_genes);
         opts.segmentation.cyto_genes = toml_get(sec, "cyto_genes", opts.segmentation.cyto_genes);
-        opts.segmentation.unassigned_prior_label = toml_get(
-            sec, "unassigned_prior_label", opts.segmentation.unassigned_prior_label);
+        // Backward-compatible prior keys formerly stored under [segmentation]
+        opts.prior.estimate_scale_from_prior = toml_get_bool(
+            sec, "estimate_scale_from_centers", opts.prior.estimate_scale_from_prior);
+        opts.prior.unassigned_label = toml_get(
+            sec, "unassigned_prior_label", opts.prior.unassigned_label);
+    }
+
+    // [prior]
+    if (doc.count("prior")) {
+        auto& sec = doc["prior"];
+        std::string type = toml_get(sec, "type", "");
+        std::transform(type.begin(), type.end(), type.begin(), ::tolower);
+        if (type == "none" || type.empty()) opts.prior.type = PriorInputType::None;
+        else if (type == "column") opts.prior.type = PriorInputType::Column;
+        else if (type == "image") opts.prior.type = PriorInputType::Image;
+        else if (type == "boundary") opts.prior.type = PriorInputType::Boundary;
+        opts.prior.path = toml_get(sec, "path", opts.prior.path);
+        opts.prior.column_name = toml_get(sec, "column_name", opts.prior.column_name);
+        opts.prior.unassigned_label = toml_get(
+            sec, "unassigned_label", opts.prior.unassigned_label);
+        opts.prior.min_molecules_per_segment = toml_get_int(
+            sec, "min_molecules_per_segment", opts.prior.min_molecules_per_segment);
+        opts.prior.estimate_scale_from_prior = toml_get_bool(
+            sec, "estimate_scale_from_prior", opts.prior.estimate_scale_from_prior);
     }
 
     // [plotting]
@@ -251,38 +287,50 @@ void save_params_toml(const RunOptions& opts, const std::string& cli_cmd,
 
     f << "# CLI params: `" << cli_cmd << "`\n";
 
-    f << "[data]\n";
-    f << "x = \"" << opts.data.x_col << "\"\n";
-    f << "y = \"" << opts.data.y_col << "\"\n";
-    f << "z = \"" << opts.data.z_col << "\"\n";
-    f << "gene = \"" << opts.data.gene_col << "\"\n";
-    f << "qv = \"" << opts.data.qv_col << "\"\n";
-    f << "force_2d = " << (opts.data.force_2d ? "true" : "false") << "\n";
-    f << "min_molecules_per_gene = " << opts.data.min_molecules_per_gene << "\n";
-    f << "exclude_genes = \"" << opts.data.exclude_genes << "\"\n";
-    f << "min_molecules_per_cell = " << opts.data.min_molecules_per_cell << "\n";
-    f << "min_molecules_per_segment = " << opts.data.min_molecules_per_segment << "\n";
-    f << "confidence_nn_id = " << opts.data.confidence_nn_id << "\n";
-    f << "min_qv = " << opts.data.min_qv << "\n";
-    f << "x_min = " << opts.data.x_min << "\n";
-    f << "x_max = " << opts.data.x_max << "\n";
-    f << "y_min = " << opts.data.y_min << "\n";
-    f << "y_max = " << opts.data.y_max << "\n";
-    f << "z_min = " << opts.data.z_min << "\n";
-    f << "z_max = " << opts.data.z_max << "\n";
+    f << "[molecules]\n";
+    f << "x = \"" << opts.molecules.x_col << "\"\n";
+    f << "y = \"" << opts.molecules.y_col << "\"\n";
+    f << "z = \"" << opts.molecules.z_col << "\"\n";
+    f << "gene = \"" << opts.molecules.gene_col << "\"\n";
+    f << "qv = \"" << opts.molecules.qv_col << "\"\n";
+    f << "force_2d = " << (opts.molecules.force_2d ? "true" : "false") << "\n";
+    f << "min_molecules_per_gene = " << opts.molecules.min_molecules_per_gene << "\n";
+    f << "exclude_genes = \"" << opts.molecules.exclude_genes << "\"\n";
+    f << "min_molecules_per_cell = " << opts.molecules.min_molecules_per_cell << "\n";
+    f << "confidence_nn_id = " << opts.molecules.confidence_nn_id << "\n";
+    f << "min_qv = " << opts.molecules.min_qv << "\n";
+    f << "x_min = " << opts.molecules.x_min << "\n";
+    f << "x_max = " << opts.molecules.x_max << "\n";
+    f << "y_min = " << opts.molecules.y_min << "\n";
+    f << "y_max = " << opts.molecules.y_max << "\n";
+    f << "z_min = " << opts.molecules.z_min << "\n";
+    f << "z_max = " << opts.molecules.z_max << "\n";
+
+    f << "\n[prior]\n";
+    const char* prior_type = "none";
+    switch (opts.prior.type) {
+        case PriorInputType::None: prior_type = "none"; break;
+        case PriorInputType::Column: prior_type = "column"; break;
+        case PriorInputType::Image: prior_type = "image"; break;
+        case PriorInputType::Boundary: prior_type = "boundary"; break;
+    }
+    f << "type = \"" << prior_type << "\"\n";
+    f << "path = \"" << opts.prior.path << "\"\n";
+    f << "column_name = \"" << opts.prior.column_name << "\"\n";
+    f << "unassigned_label = \"" << opts.prior.unassigned_label << "\"\n";
+    f << "min_molecules_per_segment = " << opts.prior.min_molecules_per_segment << "\n";
+    f << "estimate_scale_from_prior = "
+      << (opts.prior.estimate_scale_from_prior ? "true" : "false") << "\n";
 
     f << "\n[segmentation]\n";
     f << "scale = " << opts.segmentation.scale << "\n";
     f << "scale_std = \"" << opts.segmentation.scale_std << "\"\n";
-    f << "estimate_scale_from_centers = "
-      << (opts.segmentation.estimate_scale_from_centers ? "true" : "false") << "\n";
     f << "n_clusters = " << opts.segmentation.n_clusters << "\n";
     f << "prior_segmentation_confidence = " << opts.segmentation.prior_segmentation_confidence << "\n";
     f << "iters = " << opts.segmentation.iters << "\n";
     f << "n_cells_init = " << opts.segmentation.n_cells_init << "\n";
     f << "nuclei_genes = \"" << opts.segmentation.nuclei_genes << "\"\n";
     f << "cyto_genes = \"" << opts.segmentation.cyto_genes << "\"\n";
-    f << "unassigned_prior_label = \"" << opts.segmentation.unassigned_prior_label << "\"\n";
 
     f << "\n[plotting]\n";
     f << "gene_composition_neigborhood = " << opts.plotting.gene_composition_neighborhood << "\n";
