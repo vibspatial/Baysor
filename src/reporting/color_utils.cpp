@@ -165,23 +165,20 @@ std::vector<std::string> embedding_to_hex(const Eigen::MatrixXd& lab_embedding) 
 // gene_composition_color_embedding (UMAP-based)
 // ============================================================================
 
-std::vector<std::string> gene_composition_color_embedding(
+namespace {
+
+struct NcvSampleSelection {
+    std::vector<int> sample_ids;
+    double chosen_threshold = 0.95;
+    int anchor_count = 0;
+};
+
+NcvSampleSelection select_ncv_sample_ids(
     const Eigen::MatrixXf& mol_vecs,
     const std::vector<double>& confidence,
-    int sample_size,
-    int seed,
-    int n_pca_dims
+    int sample_size
 ) {
-    int n_components = static_cast<int>(mol_vecs.rows());
-    int n_mols       = static_cast<int>(mol_vecs.cols());
-
-    if (n_mols == 0 || n_components < 3) {
-        return std::vector<std::string>(n_mols, "#808080");
-    }
-
-    // Select a spatially-uniform high-confidence sample for fitting the UMAP.
-    // Matches Julia's select_ids_uniformly: sum ALL component dimensions (not just 0+1)
-    // to get a spread measure, then pick evenly-spaced indices from the sorted order.
+    const int n_mols = static_cast<int>(mol_vecs.cols());
     sample_size = std::min(sample_size, n_mols);
 
     const int min_anchor_count = std::min(sample_size, n_mols);
@@ -201,11 +198,55 @@ std::vector<std::string> gene_composition_color_embedding(
         }
     }
 
-    // Julia fallback uses only anchor molecules rather than all molecules when
-    // the requested sample size exceeds the selected anchor pool.
     if (static_cast<int>(high_conf_ids.size()) < sample_size) {
         sample_size = static_cast<int>(high_conf_ids.size());
     }
+
+    NcvSampleSelection result;
+    result.chosen_threshold = chosen_threshold;
+    result.anchor_count = static_cast<int>(high_conf_ids.size());
+    if (sample_size <= 1) return result;
+
+    int hc = static_cast<int>(high_conf_ids.size());
+    std::vector<std::pair<float, int>> sum_ids(hc);
+    for (int i = 0; i < hc; ++i) {
+        float s = mol_vecs.col(high_conf_ids[i]).sum();
+        sum_ids[i] = {s, high_conf_ids[i]};
+    }
+    std::sort(sum_ids.begin(), sum_ids.end());
+    for (int i = 0; i < hc; ++i) high_conf_ids[i] = sum_ids[i].second;
+
+    result.sample_ids.reserve(sample_size);
+    for (int i = 0; i < sample_size; ++i) {
+        int idx = static_cast<int>(std::round(static_cast<double>(i) * (hc - 1) / (sample_size - 1)));
+        result.sample_ids.push_back(high_conf_ids[idx]);
+    }
+    return result;
+}
+
+NcvReportEmbedding compute_ncv_embedding(
+    const Eigen::MatrixXf& mol_vecs,
+    const std::vector<double>& confidence,
+    int sample_size,
+    int seed,
+    int n_pca_dims,
+    bool include_report_umap
+) {
+    const int n_components = static_cast<int>(mol_vecs.rows());
+    const int n_mols = static_cast<int>(mol_vecs.cols());
+
+    NcvReportEmbedding result;
+    result.colors.assign(n_mols, NCV_FALLBACK_COLOR);
+
+    if (n_mols == 0 || n_components < 3) {
+        return result;
+    }
+
+    NcvSampleSelection selection = select_ncv_sample_ids(mol_vecs, confidence, sample_size);
+    result.chosen_threshold = selection.chosen_threshold;
+    result.anchor_count = selection.anchor_count;
+    result.sample_ids = selection.sample_ids;
+    sample_size = static_cast<int>(selection.sample_ids.size());
 
     // Large runs can legitimately have no molecules above the hard 0.95
     // confidence cutoff historically used for NCV-color anchor selection. In that case
@@ -216,45 +257,39 @@ std::vector<std::string> gene_composition_color_embedding(
             "NCV color embedding fallback: insufficient anchor molecules after adaptive thresholding "
             "(max_conf={:.4f}, threshold={:.2f}, anchors={}, sample_size={}).",
             confidence.empty() ? 0.0 : *std::max_element(confidence.begin(), confidence.end()),
-            chosen_threshold,
-            high_conf_ids.size(),
+            selection.chosen_threshold,
+            selection.anchor_count,
             sample_size
         );
-        return std::vector<std::string>(n_mols, NCV_FALLBACK_COLOR);
+        return result;
     }
 
     spdlog::info(
         "NCV color embedding: selected {} anchors with confidence >= {:.2f}; sampling {} for UMAP fit.",
-        high_conf_ids.size(), chosen_threshold, sample_size
+        selection.anchor_count, selection.chosen_threshold, sample_size
     );
-
-    // Sort by sum of all component dimensions — matches Julia's sum(vals, dims=2).
-    // Precompute sums to avoid recomputing them O(N log N) times in the comparator.
-    int hc = static_cast<int>(high_conf_ids.size());
-    std::vector<std::pair<float, int>> sum_ids(hc);
-    for (int i = 0; i < hc; ++i) {
-        float s = mol_vecs.col(high_conf_ids[i]).sum();
-        sum_ids[i] = {s, high_conf_ids[i]};
-    }
-    std::sort(sum_ids.begin(), sum_ids.end());
-    for (int i = 0; i < hc; ++i) high_conf_ids[i] = sum_ids[i].second;
-
-    std::vector<int> sample_ids;
-    sample_ids.reserve(sample_size);
-    for (int i = 0; i < sample_size; ++i) {
-        int idx = static_cast<int>(std::round(static_cast<double>(i) * (hc - 1) / (sample_size - 1)));
-        sample_ids.push_back(high_conf_ids[idx]);
-    }
 
     // Build float sample matrix (n_components x sample_size) — no cast needed.
     Eigen::MatrixXf sample_mat(n_components, sample_size);
     for (int i = 0; i < sample_size; ++i)
-        sample_mat.col(i) = mol_vecs.col(sample_ids[i]);
+        sample_mat.col(i) = mol_vecs.col(selection.sample_ids[i]);
 
     // UMAP fit: use spread=2.0 to match Julia's UmapFit defaults, which produce
     // better colour separation than the umappp default of spread=1.0.
-    Eigen::MatrixXd sample_emb = umap_embed(sample_mat.cast<double>(), 3,
+    Eigen::MatrixXd sample_mat_d = sample_mat.cast<double>();
+    Eigen::MatrixXd sample_emb = umap_embed(sample_mat_d, 3,
         /*n_neighbors=*/15, /*n_epochs=*/200, seed, /*spread=*/2.0);
+
+    if (include_report_umap) {
+        Eigen::MatrixXd sample_umap2d = umap_embed(sample_mat_d, 2,
+            /*n_neighbors=*/15, /*n_epochs=*/200, seed, /*spread=*/2.0);
+        result.sample_umap_x.resize(sample_size);
+        result.sample_umap_y.resize(sample_size);
+        for (int i = 0; i < sample_size; ++i) {
+            result.sample_umap_x[i] = sample_umap2d(0, i);
+            result.sample_umap_y[i] = sample_umap2d(1, i);
+        }
+    }
 
     // PCA-reduce sample from n_components → n_pca dimensions before building the
     // interpolation KNN index.  In 20D the VPtree degenerates to exhaustive search
@@ -301,7 +336,30 @@ std::vector<std::string> gene_composition_color_embedding(
     }
 
     normalize_embedding_to_lab_range(emb);
-    return embedding_to_hex(emb);
+    result.colors = embedding_to_hex(emb);
+    return result;
+}
+
+} // namespace
+
+std::vector<std::string> gene_composition_color_embedding(
+    const Eigen::MatrixXf& mol_vecs,
+    const std::vector<double>& confidence,
+    int sample_size,
+    int seed,
+    int n_pca_dims
+) {
+    return compute_ncv_embedding(mol_vecs, confidence, sample_size, seed, n_pca_dims, false).colors;
+}
+
+NcvReportEmbedding gene_composition_report_embedding(
+    const Eigen::MatrixXf& mol_vecs,
+    const std::vector<double>& confidence,
+    int sample_size,
+    int seed,
+    int n_pca_dims
+) {
+    return compute_ncv_embedding(mol_vecs, confidence, sample_size, seed, n_pca_dims, true);
 }
 
 // ============================================================================

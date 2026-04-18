@@ -118,6 +118,38 @@ static inline std::pair<int, int> map_to_pixel(double x, double y, const RasterV
     return {px, py};
 }
 
+static int auto_point_radius_px(const RasterViewport& vp, int n_points) {
+    if (n_points <= 0) return 1;
+    double area_per_point = static_cast<double>(vp.width_px) * vp.height_px / static_cast<double>(n_points);
+    double radius = 0.23 * std::sqrt(area_per_point / PI);
+    return std::max(1, std::min(4, static_cast<int>(std::round(radius))));
+}
+
+static void draw_disc(
+    std::vector<uint8_t>& pixels,
+    int width_px,
+    int height_px,
+    int cx,
+    int cy,
+    int radius_px,
+    uint8_t r, uint8_t g, uint8_t b
+) {
+    int r2 = radius_px * radius_px;
+    for (int dy = -radius_px; dy <= radius_px; ++dy) {
+        int yy = cy + dy;
+        if (yy < 0 || yy >= height_px) continue;
+        for (int dx = -radius_px; dx <= radius_px; ++dx) {
+            if (dx * dx + dy * dy > r2) continue;
+            int xx = cx + dx;
+            if (xx < 0 || xx >= width_px) continue;
+            int off = (yy * width_px + xx) * 3;
+            pixels[off] = r;
+            pixels[off + 1] = g;
+            pixels[off + 2] = b;
+        }
+    }
+}
+
 static void draw_line(
     std::vector<uint8_t>& pixels,
     int width_px,
@@ -164,11 +196,13 @@ static std::string render_scatter_impl(
     int n,
     int width_px,
     const PolygonCollection* polygons,
+    int point_radius_px,
     std::function<void(int, uint8_t&, uint8_t&, uint8_t&)> color_fn
 ) {
     if (n == 0) return {};
 
     auto vp = make_viewport(x, y, width_px);
+    int point_radius = (point_radius_px > 0) ? point_radius_px : auto_point_radius_px(vp, n);
 
     // White background.
     std::vector<uint8_t> pixels(vp.width_px * vp.height_px * 3, 255);
@@ -182,10 +216,7 @@ static std::string render_scatter_impl(
         auto [px, py] = map_to_pixel(x[i], y[i], vp);
         uint8_t r, g, b;
         color_fn(i, r, g, b);
-        int off = (py * vp.width_px + px) * 3;
-        pixels[off]     = r;
-        pixels[off + 1] = g;
-        pixels[off + 2] = b;
+        draw_disc(pixels, vp.width_px, vp.height_px, px, py, point_radius, r, g, b);
     }
 
     if (polygons && !polygons->empty()) {
@@ -200,14 +231,15 @@ std::string render_scatter_png(
     const std::vector<double>& y,
     const std::vector<std::string>& colors,
     const PolygonCollection* polygons,
-    int width_px
+    int width_px,
+    int point_radius_px
 ) {
     int n = static_cast<int>(x.size());
     // Pre-parse hex colors to avoid repeated string parsing in the hot loop.
     std::vector<uint8_t> cr(n), cg(n), cb(n);
     for (int i = 0; i < n; ++i) hex_to_rgb(colors[i], cr[i], cg[i], cb[i]);
 
-    return render_scatter_impl(x, y, n, width_px, polygons,
+    return render_scatter_impl(x, y, n, width_px, polygons, point_radius_px,
         [&](int i, uint8_t& r, uint8_t& g, uint8_t& b) {
             r = cr[i]; g = cg[i]; b = cb[i];
         });
@@ -238,10 +270,11 @@ std::string render_confidence_png(
     const std::vector<double>& x,
     const std::vector<double>& y,
     const std::vector<double>& confidence,
-    int width_px
+    int width_px,
+    int point_radius_px
 ) {
     int n = static_cast<int>(x.size());
-    return render_scatter_impl(x, y, n, width_px, nullptr,
+    return render_scatter_impl(x, y, n, width_px, nullptr, point_radius_px,
         [&](int i, uint8_t& r, uint8_t& g, uint8_t& b) {
             blueorange_color(confidence[i], r, g, b);
         });

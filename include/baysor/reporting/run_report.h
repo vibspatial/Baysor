@@ -4,6 +4,7 @@
 #include "baysor/processing/bmm_algorithm/molecule_clustering.h"
 #include "baysor/processing/data_processing/noise_estimation.h"
 #include "baysor/processing/data_processing/boundary_estimation.h"
+#include "baysor/reporting/color_utils.h"
 #include "baysor/utils/options.h"
 
 #include <Eigen/Dense>
@@ -23,6 +24,7 @@ std::string generate_run_diagnostic_html(
     const std::vector<std::unordered_map<int, int>>& n_components_trace,
     const std::vector<double>& assignment_confidence,
     const ClusteringResult* clustering_result,
+    const NcvReportEmbedding* ncv_report,
     const Eigen::MatrixXd& cell_stats,
     const std::vector<std::string>& cell_stat_col_names,
     const PriorInputOptions& prior_opts,

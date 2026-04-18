@@ -17,7 +17,8 @@ std::string render_scatter_png(
     const std::vector<double>& y,
     const std::vector<std::string>& colors,
     const PolygonCollection* polygons = nullptr,
-    int width_px = 6000
+    int width_px = 6000,
+    int point_radius_px = 0
 );
 
 /// Render confidence scatter as a PNG (base64-encoded), coloured by a blue-orange gradient.
@@ -25,7 +26,8 @@ std::string render_confidence_png(
     const std::vector<double>& x,
     const std::vector<double>& y,
     const std::vector<double>& confidence,
-    int width_px = 6000
+    int width_px = 6000,
+    int point_radius_px = 0
 );
 
 /// Generate Vega-Lite spec: noise estimation histogram + fitted PDFs

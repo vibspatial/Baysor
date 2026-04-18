@@ -203,6 +203,43 @@ std::vector<std::string> cluster_colors(const std::vector<int>& clusters) {
     return colors;
 }
 
+std::vector<std::string> subset_colors(
+    const std::vector<std::string>& colors,
+    const std::vector<int>& ids
+) {
+    std::vector<std::string> out;
+    out.reserve(ids.size());
+    for (int idx : ids) out.push_back(colors[idx]);
+    return out;
+}
+
+std::vector<int> subset_ints(
+    const std::vector<int>& vals,
+    const std::vector<int>& ids
+) {
+    std::vector<int> out;
+    out.reserve(ids.size());
+    for (int idx : ids) out.push_back(vals[idx]);
+    return out;
+}
+
+void normalize_to_unit_square(
+    std::vector<double>& x,
+    std::vector<double>& y
+) {
+    if (x.empty() || y.empty()) return;
+
+    auto [xmin_it, xmax_it] = std::minmax_element(x.begin(), x.end());
+    auto [ymin_it, ymax_it] = std::minmax_element(y.begin(), y.end());
+    double xmin = *xmin_it, xmax = *xmax_it;
+    double ymin = *ymin_it, ymax = *ymax_it;
+    double xrange = std::max(xmax - xmin, 1e-12);
+    double yrange = std::max(ymax - ymin, 1e-12);
+
+    for (double& v : x) v = (v - xmin) / xrange;
+    for (double& v : y) v = (v - ymin) / yrange;
+}
+
 int column_index(const std::vector<std::string>& names, const std::string& target) {
     for (int i = 0; i < static_cast<int>(names.size()); ++i) {
         if (names[i] == target) return i;
@@ -232,6 +269,7 @@ std::string generate_run_diagnostic_html(
     const std::vector<std::unordered_map<int, int>>& n_components_trace,
     const std::vector<double>& assignment_confidence,
     const ClusteringResult* clustering_result,
+    const NcvReportEmbedding* ncv_report,
     const Eigen::MatrixXd& cell_stats,
     const std::vector<std::string>& cell_stat_col_names,
     const PriorInputOptions& prior_opts,
@@ -259,6 +297,35 @@ std::string generate_run_diagnostic_html(
     auto dens_spec = vega_generic_histogram(extract_col(cell_stats, dens_idx), "Cell density", "Density");
     auto elong_spec = vega_generic_histogram(extract_col(cell_stats, elong_idx), "Cell elongation", "Elongation");
 
+    std::string ncv_umap_png;
+    std::string cluster_umap_png;
+    if (ncv_report && !ncv_report->sample_ids.empty() &&
+        ncv_report->sample_ids.size() == ncv_report->sample_umap_x.size() &&
+        ncv_report->sample_ids.size() == ncv_report->sample_umap_y.size()) {
+        auto umap_x = ncv_report->sample_umap_x;
+        auto umap_y = ncv_report->sample_umap_y;
+        normalize_to_unit_square(umap_x, umap_y);
+        ncv_umap_png = render_scatter_png(
+            umap_x,
+            umap_y,
+            subset_colors(ncv_report->colors, ncv_report->sample_ids),
+            nullptr,
+            1540,
+            2
+        );
+        if (clustering_result && clustering_result->assignment.size() == data.n_molecules()) {
+            auto sampled_clusters = subset_ints(clustering_result->assignment, ncv_report->sample_ids);
+            cluster_umap_png = render_scatter_png(
+                umap_x,
+                umap_y,
+                cluster_colors(sampled_clusters),
+                nullptr,
+                1540,
+                2
+            );
+        }
+    }
+
     int n_noise = 0;
     for (int a : assignment) n_noise += (a == 0);
     int n_with_prior = 0;
@@ -279,6 +346,8 @@ std::string generate_run_diagnostic_html(
 body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; margin: 20px; background: #fff; }
 h1 { border-bottom: 2px solid #333; padding-bottom: 5px; }
 .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(520px, 1fr)); gap: 24px; align-items: start; }
+.plot-container { margin: 0; }
+.png-plot { display: block; max-width: 100%; height: auto; border: 1px solid #ddd; }
 .stats { background: #f5f5f5; padding: 10px 15px; border-radius: 5px; margin: 10px 0 20px 0; font-size: 14px; line-height: 1.7; }
 ul { line-height: 2; }
 a { color: #1f77b4; }
@@ -289,6 +358,11 @@ a { color: #1f77b4; }
 <ul>
 <li><a href="#summary">Summary</a></li>
 <li><a href="#convergence">Convergence</a></li>
+)";
+    if (!ncv_umap_png.empty()) {
+        html << "<li><a href=\"#ncv_manifold\">NCV / clustering manifold</a></li>\n";
+    }
+    html << R"(
 <li><a href="#confidence">Confidence</a></li>
 <li><a href="#cells">Cell statistics</a></li>
 </ul>
@@ -330,6 +404,34 @@ a { color: #1f77b4; }
 )";
     }
     html << R"(</div>
+)";
+    if (!ncv_umap_png.empty()) {
+        html << R"(
+
+<hr>
+<h1 id="ncv_manifold">NCV / clustering manifold</h1>
+<div class="grid">
+<div class="plot-container">
+<h3>Colored by NCV</h3>
+<img class="png-plot" src=")";
+        html << ncv_umap_png;
+        html << R"(" alt="NCV manifold colored by NCV">
+</div>
+)";
+        if (!cluster_umap_png.empty()) {
+            html << R"(
+<div class="plot-container">
+<h3>Colored by cluster assignment</h3>
+<img class="png-plot" src=")";
+            html << cluster_umap_png;
+            html << R"(" alt="NCV manifold colored by cluster assignment">
+</div>
+)";
+        }
+        html << R"(</div>
+)";
+    }
+    html << R"(
 
 <hr>
 <h1 id="confidence">Confidence</h1>

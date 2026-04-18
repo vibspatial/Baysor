@@ -36,6 +36,29 @@ std::vector<std::string> gene_composition_color_embedding(
     int n_pca_dims = 10
 );
 
+/// Report-oriented NCV embedding diagnostics.
+/// sample_ids indexes the anchor molecules used to fit the NCV embedding.
+/// sample_umap_* stores a 2D UMAP of those same anchors for report visualization.
+struct NcvReportEmbedding {
+    std::vector<std::string> colors;
+    std::vector<int> sample_ids;
+    std::vector<double> sample_umap_x;
+    std::vector<double> sample_umap_y;
+    double chosen_threshold = 0.95;
+    int anchor_count = 0;
+};
+
+/// UMAP-based color embedding with extra diagnostics for `run --plot`.
+/// This computes the same NCV colors as gene_composition_color_embedding, plus
+/// a 2D UMAP on the sampled anchor molecules for report visualization.
+NcvReportEmbedding gene_composition_report_embedding(
+    const Eigen::MatrixXf& mol_vecs,
+    const std::vector<double>& confidence,
+    int sample_size = 20000,
+    int seed = 42,
+    int n_pca_dims = 10
+);
+
 /// Pairwise gene spatial co-occurrence matrix from the molecule adjacency graph.
 /// Returns n_genes x n_genes matrix normalized by sqrt of sum weights.
 Eigen::MatrixXd pairwise_gene_spatial_cor(

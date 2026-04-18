@@ -189,6 +189,7 @@ int cmd_run(
         spdlog::info("Segmentation complete: {} cells.", n_cells_final);
 
         std::vector<std::string> ncv_color;
+        std::optional<NcvReportEmbedding> ncv_report;
         if (!skip_ncv_color) {
             spdlog::info("Computing neighborhood composition colors...");
             int comp_k = opts.plotting.gene_composition_neighborhood;
@@ -198,7 +199,12 @@ int cmd_run(
                 for (Eigen::SparseMatrix<float>::InnerIterator it(neighb_cm, k); it; ++it)
                     it.valueRef() = static_cast<float>(std::log(it.value() * 10000.0f + 1e-5f));
             auto mol_vecs = estimate_gene_vectors(neighb_cm, data.gene, 20, "ri", true);
-            ncv_color = gene_composition_color_embedding(mol_vecs, data.confidence);
+            if (plot) {
+                ncv_report = gene_composition_report_embedding(mol_vecs, data.confidence);
+                ncv_color = ncv_report->colors;
+            } else {
+                ncv_color = gene_composition_color_embedding(mol_vecs, data.confidence);
+            }
         }
 
         // Save per-molecule CSV
@@ -402,6 +408,7 @@ int cmd_run(
                 bm_data.n_components_trace,
                 bm_data.assignment_confidence,
                 clustering_result ? &*clustering_result : nullptr,
+                ncv_report ? &*ncv_report : nullptr,
                 cell_stats_mat,
                 cell_stat_col_names,
                 opts.prior,

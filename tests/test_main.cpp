@@ -2326,14 +2326,25 @@ TEST(RunReport, GeneratesDiagnosticHtml) {
     prior.type = baysor::PriorInputType::Column;
     prior.column_name = "cell_id";
 
+    baysor::ClusteringResult clustering_result;
+    clustering_result.assignment = {1, 1, 2, 2};
+
+    baysor::NcvReportEmbedding ncv_report;
+    ncv_report.colors = {"#ff0000", "#00ff00", "#0000ff", "#ff00ff"};
+    ncv_report.sample_ids = {0, 2, 3};
+    ncv_report.sample_umap_x = {0.0, 1.0, 2.0};
+    ncv_report.sample_umap_y = {0.0, 1.0, 0.5};
+
     auto html = baysor::generate_run_diagnostic_html(
         data, edge_lengths, noise_result, 10, assignment, trace, assignment_conf,
-        nullptr, cell_stats, cell_cols, prior, 4.5, "1.2");
+        &clustering_result, &ncv_report, cell_stats, cell_cols, prior, 4.5, "1.2");
 
     EXPECT_NE(html.find("Baysor Run Report"), std::string::npos);
     EXPECT_NE(html.find("Segmentation convergence"), std::string::npos);
     EXPECT_NE(html.find("Molecule confidence"), std::string::npos);
     EXPECT_NE(html.find("Prior column: cell_id"), std::string::npos);
+    EXPECT_NE(html.find("NCV / clustering manifold"), std::string::npos);
+    EXPECT_NE(html.find("Colored by cluster assignment"), std::string::npos);
 }
 
 TEST(RunReport, GeneratesSegmentationHtml) {
