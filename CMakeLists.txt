@@ -95,6 +95,7 @@ add_library(baysor_lib
     # Utils
     src/utils/general.cpp
     src/utils/options.cpp
+    src/utils/xenium.cpp
 
     # Data loading
     src/data_loading/data.cpp

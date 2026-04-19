@@ -20,6 +20,7 @@
 #include "baysor/reporting/run_report.h"
 
 #include "baysor/utils/general.h"
+#include "baysor/utils/xenium.h"
 
 #include <Eigen/Dense>
 
@@ -42,6 +43,7 @@ int cmd_run(
     const std::string& coordinates,
     RunOptions& opts,
     const std::string& output,
+    OutputStyle output_style,
     bool plot,
     bool skip_ncv_color,
     const std::string& polygon_format,
@@ -114,7 +116,7 @@ int cmd_run(
             spdlog::warn("Could not create output directory '{}'", output);
         }
     }
-    auto out_paths = get_output_paths(output, count_matrix_format);
+    auto out_paths = get_output_paths(output, output_style, count_matrix_format);
 
     // Set up dual logger: console + log file (matches Julia's setup_logger)
     {
@@ -208,23 +210,31 @@ int cmd_run(
             }
         }
 
-        // Save per-molecule CSV
+        // Save per-molecule segmentation table
         spdlog::info("Saving segmented molecule table...");
         const std::vector<double>* ac_ptr = bm_data.assignment_confidence.empty()
                                             ? nullptr : &bm_data.assignment_confidence;
-        save_segmented_df(data, bm_data.assignment, data.gene_names, out_paths.segmented_df,
-                          &ncv_color, ac_ptr,
-                          mol_clusters.empty() ? nullptr : &mol_clusters);
+        if (output_style == OutputStyle::Parquet) {
+            save_segmented_df_parquet(
+                data, bm_data.assignment, data.gene_names, out_paths.segmented_df,
+                &ncv_color, ac_ptr, mol_clusters.empty() ? nullptr : &mol_clusters
+            );
+        } else {
+            save_segmented_df(
+                data, bm_data.assignment, data.gene_names, out_paths.segmented_df,
+                &ncv_color, ac_ptr, mol_clusters.empty() ? nullptr : &mol_clusters
+            );
+        }
 
         // Save per-cell stats CSV
         spdlog::info("Saving cell stats...");
         Eigen::MatrixXd cell_stats_mat;
         std::vector<std::string> cell_stat_col_names;
+        std::vector<std::string> cell_names(n_cells_final);
+        for (int i = 0; i < n_cells_final; ++i) {
+            cell_names[i] = "cell_" + std::to_string(i + 1);
+        }
         {
-            std::vector<std::string> cell_names(n_cells_final);
-            for (int i = 0; i < n_cells_final; ++i)
-                cell_names[i] = "cell_" + std::to_string(i + 1);
-
             auto ids_by_cell = split_ids(bm_data.assignment, n_cells_final, true);
 
             // Precompute lifespan map (guid → lifespan)
@@ -332,19 +342,18 @@ int cmd_run(
                 }
             }
 
-            save_cell_stat_df(cell_stats_mat, cell_names, cell_stat_col_names, out_paths.cell_stats);
+            if (output_style == OutputStyle::Parquet) {
+                save_cell_stat_df_parquet(cell_stats_mat, cell_names, cell_stat_col_names, out_paths.cell_stats);
+            } else {
+                save_cell_stat_df(cell_stats_mat, cell_names, cell_stat_col_names, out_paths.cell_stats);
+            }
         }
 
         // Save cell polygons as GeoJSON
         PolygonCollection poly_joined;
         PolygonStack poly_stack;
         bool have_polygons = false;
-        if (polygon_format != "none" || plot) {
-            std::vector<std::string> cell_names(n_cells_final);
-            for (int ci = 0; ci < n_cells_final; ++ci) {
-                cell_names[ci] = "cell_" + std::to_string(ci + 1);
-            }
-
+        if (output_style == OutputStyle::Parquet || polygon_format != "none" || plot) {
             auto pos = data.position_matrix();
             auto polys = boundary_polygons_auto(
                 pos, bm_data.assignment, /*estimate_per_z=*/(N == 3), &cell_names, /*verbose=*/true);
@@ -353,12 +362,20 @@ int cmd_run(
             have_polygons = true;
         }
 
-        if (polygon_format != "none") {
+        if (output_style == OutputStyle::Parquet || polygon_format != "none") {
             spdlog::info("Saving cell polygons...");
-            if (N == 3) {
-                save_polygon_stack_geojson(poly_stack, out_paths, polygon_format);
+            if (output_style == OutputStyle::Parquet) {
+                if (N == 3) {
+                    save_polygon_stack_geoparquet(poly_stack, out_paths);
+                } else {
+                    save_polygons_geoparquet(poly_joined, out_paths.polygons_2d);
+                }
             } else {
-                save_polygons_geojson(poly_joined, out_paths.polygons_2d, polygon_format);
+                if (N == 3) {
+                    save_polygon_stack_geojson(poly_stack, out_paths, polygon_format);
+                } else {
+                    save_polygons_geojson(poly_joined, out_paths.polygons_2d, polygon_format);
+                }
             }
         }
 
@@ -387,7 +404,9 @@ int cmd_run(
             Eigen::SparseMatrix<float> cm(n_cells_final, ng);
             cm.setFromTriplets(trips.begin(), trips.end());
 
-            if (count_matrix_format == "tsv") {
+            if (output_style == OutputStyle::Parquet) {
+                save_matrix_to_10x_h5(cm, data.gene_names, cell_names_cm, out_paths.counts);
+            } else if (count_matrix_format == "tsv") {
                 Eigen::SparseMatrix<double> cm_d = cm.cast<double>();
                 save_matrix_to_tsv(cm_d, data.gene_names, cell_names_cm, out_paths.counts);
             } else {
@@ -438,7 +457,7 @@ int cmd_run(
             }
         }
 
-        spdlog::info("Results saved to '{}'", output);
+        spdlog::info("Results saved to '{}' in {} style", output, to_string(output_style));
     };
 
     if (data.is_3d()) {
@@ -631,6 +650,7 @@ int main(int argc, char* argv[]) {
 
     std::string run_coordinates, run_prior_seg;
     std::string run_output = "segmentation.csv";
+    std::string run_output_style = "legacy";
     std::string run_polygon_format = "FeatureCollection";
     std::string run_count_format = "loom";
     bool run_plot = false;
@@ -687,7 +707,9 @@ int main(int argc, char* argv[]) {
     run->add_option("--cyto-genes", opts.segmentation.cyto_genes,
         "Comma-separated list of cytoplasm-specific genes");
     run->add_option("-o,--output", run_output,
-        "Output file or directory (default: segmentation.csv)");
+        "Output directory (default: segmentation.csv for legacy compatibility)");
+    run->add_option("--output-style", run_output_style,
+        "Output bundle style: legacy or parquet (default: legacy)");
     run->add_option("--polygon-format", run_polygon_format,
         "Polygon output format: FeatureCollection, GeometryCollection, or none (default: FeatureCollection)");
     run->add_option("--count-matrix-format", run_count_format,
@@ -805,8 +827,38 @@ int main(int argc, char* argv[]) {
         cli_cmd += argv[i];
     }
 
+    auto resolve_xenium_input = [](const std::string& coordinates) -> std::string {
+        if (!is_xenium_manifest_path(coordinates)) {
+            return coordinates;
+        }
+        auto xenium_ctx = load_xenium_manifest_context(coordinates);
+        return xenium_ctx.transcripts_path;
+    };
+
     // Dispatch
     if (run->parsed()) {
+        OutputStyle output_style;
+        try {
+            output_style = parse_output_style(run_output_style);
+        } catch (const std::exception& e) {
+            spdlog::error("{}", e.what());
+            return 1;
+        }
+        std::string resolved_run_input = run_coordinates;
+        try {
+            resolved_run_input = resolve_xenium_input(run_coordinates);
+        } catch (const std::exception& e) {
+            spdlog::error("{}", e.what());
+            return 1;
+        }
+        if (output_style != OutputStyle::Legacy) {
+            if (run_polygon_format != "FeatureCollection") {
+                spdlog::warn("--polygon-format is ignored for output style '{}'", run_output_style);
+            }
+            if (run_count_format != "loom") {
+                spdlog::warn("--count-matrix-format is ignored for output style '{}'", run_output_style);
+            }
+        }
         if (!run_prior_seg.empty()) {
             opts.prior = parse_prior_input_spec(run_prior_seg);
         }
@@ -817,16 +869,26 @@ int main(int argc, char* argv[]) {
             spdlog::error("Either prior_segmentation or --scale must be provided.");
             return 1;
         }
-        return cmd_run(run_coordinates, opts, run_output,
+        return cmd_run(resolved_run_input, opts, run_output, output_style,
                        run_plot, run_skip_ncv_color, run_polygon_format, run_count_format, cli_cmd);
     }
 
     if (preview->parsed()) {
-        return cmd_preview(prev_coordinates, opts, prev_output);
+        try {
+            return cmd_preview(resolve_xenium_input(prev_coordinates), opts, prev_output);
+        } catch (const std::exception& e) {
+            spdlog::error("{}", e.what());
+            return 1;
+        }
     }
 
     if (segfree->parsed()) {
-        return cmd_segfree(sf_coordinates, opts, sf_k_neighbors, sf_output);
+        try {
+            return cmd_segfree(resolve_xenium_input(sf_coordinates), opts, sf_k_neighbors, sf_output);
+        } catch (const std::exception& e) {
+            spdlog::error("{}", e.what());
+            return 1;
+        }
     }
 
     return 0;

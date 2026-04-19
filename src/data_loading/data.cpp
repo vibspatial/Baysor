@@ -378,6 +378,7 @@ struct ParquetScanPlan {
     int z = -1;
     int gene = -1;
     int qv = -1;
+    int transcript_id = -1;
     int prior = -1;
     int confidence = -1;
     int cluster = -1;
@@ -418,9 +419,10 @@ ParquetScanPlan make_parquet_scan_plan(
     if (!opts.force_2d && has_column(schema, opts.z_col)) {
         plan.z = find_column_index(schema, opts.z_col);
     }
-    if (opts.min_qv >= 0.0) {
+    if (has_column(schema, opts.qv_col)) {
         plan.qv = find_column_index(schema, opts.qv_col);
     }
+    if (has_column(schema, "transcript_id")) plan.transcript_id = find_column_index(schema, "transcript_id");
     if (!prior_column_name.empty()) {
         plan.prior = find_column_index(schema, prior_column_name);
     }
@@ -602,6 +604,7 @@ void filter_genes_by_count(MoleculeData& data, int min_molecules_per_gene) {
     compact(data.cluster);
     compact(data.prior_segmentation);
     compact(data.nuclei_probs);
+    compact(data.source_transcript_id);
 
     // Re-encode genes: collect raw strings for kept molecules, then re-encode
     std::vector<std::string> kept_gene_strings;
@@ -697,6 +700,7 @@ void filter_genes_by_pattern(MoleculeData& data, const std::vector<std::string>&
     compact(data.cluster);
     compact(data.prior_segmentation);
     compact(data.nuclei_probs);
+    compact(data.source_transcript_id);
 
     // Re-encode
     std::vector<std::string> kept_gene_strings;
@@ -787,6 +791,7 @@ MoleculeData load_molecules(
         if (plan.z >= 0) projected.push_back(plan.z);
         projected.push_back(plan.gene);
         if (plan.qv >= 0) projected.push_back(plan.qv);
+        if (plan.transcript_id >= 0) projected.push_back(plan.transcript_id);
         if (plan.prior >= 0) projected.push_back(plan.prior);
         if (plan.confidence >= 0) projected.push_back(plan.confidence);
         if (plan.cluster >= 0) projected.push_back(plan.cluster);
@@ -798,6 +803,7 @@ MoleculeData load_molecules(
         data.y.resize(pass1.kept_rows);
         data.gene.resize(pass1.kept_rows);
         if (plan.z >= 0) data.z.resize(pass1.kept_rows);
+        if (plan.transcript_id >= 0) data.source_transcript_id.resize(pass1.kept_rows);
         if (plan.confidence >= 0) data.confidence.resize(pass1.kept_rows);
         if (plan.cluster >= 0) data.cluster.resize(pass1.kept_rows);
         if (plan.nuclei_probs >= 0) data.nuclei_probs.resize(pass1.kept_rows);
@@ -819,6 +825,8 @@ MoleculeData load_molecules(
             auto gene_arr = batch->column(col++);
             std::shared_ptr<arrow::Array> qv_arr;
             if (plan.qv >= 0) qv_arr = batch->column(col++);
+            std::shared_ptr<arrow::Array> transcript_id_arr;
+            if (plan.transcript_id >= 0) transcript_id_arr = batch->column(col++);
             std::shared_ptr<arrow::Array> prior_arr;
             if (plan.prior >= 0) prior_arr = batch->column(col++);
             std::shared_ptr<arrow::Array> confidence_arr;
@@ -839,12 +847,18 @@ MoleculeData load_molecules(
 
                 auto gene = read_string_value(gene_arr, i);
                 auto it = pass1.gene_id_map.find(gene);
-                if (it == pass1.gene_id_map.end()) continue;
+                if (it == pass1.gene_id_map.end()) {
+                    continue;
+                }
 
                 data.x[out_idx] = x;
                 data.y[out_idx] = y;
                 if (plan.z >= 0) data.z[out_idx] = z;
                 data.gene[out_idx] = it->second;
+                if (plan.transcript_id >= 0) {
+                    data.source_transcript_id[out_idx] = static_cast<std::uint64_t>(std::llround(
+                        read_numeric_value(transcript_id_arr, i)));
+                }
                 if (plan.prior >= 0) prior_raw[out_idx] = read_string_value(prior_arr, i);
                 if (plan.confidence >= 0) {
                     data.confidence[out_idx] = read_numeric_value(confidence_arr, i);
@@ -864,6 +878,7 @@ MoleculeData load_molecules(
         data.y.resize(out_idx);
         data.gene.resize(out_idx);
         if (!data.z.empty()) data.z.resize(out_idx);
+        if (!data.source_transcript_id.empty()) data.source_transcript_id.resize(out_idx);
         if (!data.confidence.empty()) data.confidence.resize(out_idx);
         if (!data.cluster.empty()) data.cluster.resize(out_idx);
         if (!data.nuclei_probs.empty()) data.nuclei_probs.resize(out_idx);
@@ -928,8 +943,15 @@ MoleculeData load_molecules(
         data.nuclei_probs = extract_double_column(table, "nuclei_probs");
     }
     std::vector<double> qv_values;
-    if (opts.min_qv >= 0.0) {
+    if (has_column(table, opts.qv_col)) {
         qv_values = extract_double_column(table, opts.qv_col);
+    }
+    if (has_column(table, "transcript_id")) {
+        auto transcript_ids_d = extract_double_column(table, "transcript_id");
+        data.source_transcript_id.resize(transcript_ids_d.size());
+        for (size_t i = 0; i < transcript_ids_d.size(); ++i) {
+            data.source_transcript_id[i] = static_cast<std::uint64_t>(std::llround(transcript_ids_d[i]));
+        }
     }
     std::vector<std::string> prior_raw;
     if (load_prior_column) {
@@ -964,6 +986,7 @@ MoleculeData load_molecules(
     compact(data.confidence);
     compact(data.cluster);
     compact(data.nuclei_probs);
+    compact(data.source_transcript_id);
     compact(gene_strings);
     compact(prior_raw);
 

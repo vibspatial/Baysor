@@ -26,6 +26,9 @@ struct MoleculeData {
     std::vector<int> prior_segmentation;         // prior segmentation labels (0 = unassigned)
     std::vector<double> nuclei_probs;
 
+    // --- Source-side transcript metadata (preserved when present, e.g. Xenium) ---
+    std::vector<std::uint64_t> source_transcript_id;
+
     // --- Extra string columns from input (preserved for output) ---
     // Column name -> values. Only populated if the input had extra columns we want to keep.
     // Omitted for now; can add later if needed.

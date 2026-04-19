@@ -23,6 +23,10 @@ Example datasets and runnable commands:
 - [osm-FISH](examples/osm-FISH/README.md)
 - [STARmap](examples/STARmap/README.md)
 
+User-facing documentation for this branch:
+
+- [docs/README.md](docs/README.md)
+
 ## Build
 
 ### Dependencies

@@ -1,12 +1,15 @@
-# Example run on 10x Xenium pancreas data
+# Example Run On 10x Xenium Pancreas Data
 
-This is an example of a Xenium v1 dataset with cell segmentation kit prior. The example is based on the 10x Genomics dataset [FFPE Human Pancreas with Xenium Multimodal Cell Segmentation](https://www.10xgenomics.com/datasets/ffpe-human-pancreas-with-xenium-multimodal-cell-segmentation-1-standard).
+This example uses a Xenium v1 dataset with the cell-segmentation-kit prior. The
+dataset is based on the 10x Genomics example
+[FFPE Human Pancreas with Xenium Multimodal Cell Segmentation](https://www.10xgenomics.com/datasets/ffpe-human-pancreas-with-xenium-multimodal-cell-segmentation-1-standard).
 
-The panel has 377 genes. The dataset page reports 140,702 detected cells and 7,170,423 high-quality decoded transcripts. 
+The panel has 377 genes. The dataset page reports 140,702 detected cells and
+7,170,423 high-quality decoded transcripts.
 
-## Get the data
+## Get The Data
 
-We'll use `data/` for the raw 10x bundle and `tests/` for Baysor outputs.
+Use `data/` for the raw Xenium bundle and `tests/` for Baysor outputs.
 
 ```bash
 mkdir -p data tests
@@ -22,50 +25,74 @@ unzip data/Xenium_V1_human_Pancreas_FFPE_outs.zip -d data
 
 The main files used below are:
 
+- `data/experiment.xenium`
 - `data/transcripts.parquet`
 - `data/cell_boundaries.parquet`
 - `data/nucleus_boundaries.parquet`
-- `data/experiment.xenium`
 
-## CLI run
+## Recommended Input Form
 
-These commands assume you run them from this directory. Use `../../build/baysor` if running the compiled binary from the repo build tree, or replace it with `baysor` if the executable is already on your `PATH`.
+For Xenium runs, prefer passing `experiment.xenium` as the main input:
 
-### With transcript-native prior labels
+```bash
+../../build/baysor run ... ./data/experiment.xenium ...
+```
 
-This uses the `cell_id` column already present in `transcripts.parquet`.
+That gives Baysor enough source context to:
+
+- resolve the bundled transcript table automatically
+- preserve `transcript_id` in `legacy` output
+- make the legacy outputs directly usable by
+  `xeniumranger import-segmentation`
+
+Passing `transcripts.parquet` directly still works, but `experiment.xenium` is
+the cleaner Xenium-aware path.
+
+## CLI Runs
+
+These commands assume you run them from this directory. Use `../../build/baysor`
+if running the binary from the repo build tree, or replace it with `baysor` if
+the executable is already on your `PATH`.
+
+### Full Run With Transcript-Native Prior Labels
+
+This uses the `cell_id` column already present in the Xenium transcript table.
 
 ```bash
 ../../build/baysor run \
   -c ../../configs/xenium.toml \
   -o ./tests/full_cellid \
-  ./data/transcripts.parquet \
+  ./data/experiment.xenium \
   :cell_id
 ```
 
-### With cell boundary priors
+This is the recommended full Xenium run if you intend to hand the result off to
+Xenium Ranger / Xenium Explorer later.
 
-This assigns molecules to prior segments by point-in-polygon against the Xenium cell boundary file.
+### Full Run With Cell Boundary Priors
+
+This assigns molecules to prior segments by point-in-polygon against the Xenium
+cell boundary file.
 
 ```bash
 ../../build/baysor run \
   -c ../../configs/xenium.toml \
   -o ./tests/full_cell_boundaries \
-  ./data/transcripts.parquet \
+  ./data/experiment.xenium \
   ./data/cell_boundaries.parquet
 ```
 
-### With nucleus boundary priors
+### Full Run With Nucleus Boundary Priors
 
 ```bash
 ../../build/baysor run \
   -c ../../configs/xenium.toml \
   -o ./tests/full_nucleus_boundaries \
-  ./data/transcripts.parquet \
+  ./data/experiment.xenium \
   ./data/nucleus_boundaries.parquet
 ```
 
-### Without priors
+### Full Run Without Priors
 
 Without any prior segmentation input, Baysor needs an explicit scale.
 
@@ -74,14 +101,86 @@ Without any prior segmentation input, Baysor needs an explicit scale.
   -c ../../configs/xenium.toml \
   --scale 4.5 \
   -o ./tests/full_no_prior \
-  ./data/transcripts.parquet
+  ./data/experiment.xenium
 ```
 
-## Cropped runs
+## Output Modes
 
-baysor-cpp supports on-the-fly spatial filtering during input loading. This is useful for testing and for very large datasets. Here are examples of how to limit process to a particular region:
+The C++ branch currently supports two output styles:
 
-### Crop with transcript-native prior labels
+- `legacy`
+- `parquet`
+
+`legacy` is the default. For Xenium-origin inputs, it automatically adds the
+extra fields needed by `xeniumranger import-segmentation`:
+
+- `segmentation.csv`
+  - includes `transcript_id`
+  - writes `is_noise` as `true` / `false`
+- `segmentation_polygons_2d.json`
+  - stays a GeoJSON `FeatureCollection`
+  - includes `properties.cell` on each feature
+
+### Legacy Output
+
+```bash
+../../build/baysor run \
+  -c ../../configs/xenium.toml \
+  --output-style legacy \
+  -o ./tests/full_cellid_legacy \
+  ./data/experiment.xenium \
+  :cell_id
+```
+
+### Parquet Output
+
+This emits:
+
+- `molecules.parquet`
+- `cells.parquet`
+- `cell_boundaries.parquet`
+- `cell_boundaries_3d.parquet`
+- `feature_matrix.h5`
+
+```bash
+../../build/baysor run \
+  -c ../../configs/xenium.toml \
+  --output-style parquet \
+  -o ./tests/full_cellid_parquet \
+  ./data/experiment.xenium \
+  :cell_id
+```
+
+## Xenium Explorer Handoff
+
+The current recommended path to Xenium Explorer is:
+
+1. run Baysor in `legacy` mode on the full Xenium bundle
+2. pass Baysor outputs into `xeniumranger import-segmentation`
+
+Example:
+
+```bash
+xeniumranger import-segmentation \
+  --id baysor_pancreas \
+  --xenium-bundle ./data \
+  --transcript-assignment ./tests/full_cellid/segmentation.csv \
+  --viz-polygons ./tests/full_cellid/segmentation_polygons_2d.json \
+  --units microns
+```
+
+Notes:
+
+- use a full run, not a crop, for Xenium Ranger import
+- the recommended Baysor input for this workflow is `experiment.xenium`
+- the legacy outputs now contain the extra Ranger-compatible fields automatically
+
+## Cropped Runs
+
+The C++ branch supports on-the-fly spatial filtering during input loading. This
+is useful for testing and for very large datasets.
+
+### Crop With Transcript-Native Prior Labels
 
 ```bash
 ../../build/baysor run \
@@ -89,11 +188,11 @@ baysor-cpp supports on-the-fly spatial filtering during input loading. This is u
   --x-min 0 --x-max 2000 \
   --y-min 0 --y-max 2000 \
   -o ./tests/crop_cellid \
-  ./data/transcripts.parquet \
+  ./data/experiment.xenium \
   :cell_id
 ```
 
-### Crop with cell boundary priors
+### Crop With Cell Boundary Priors
 
 ```bash
 ../../build/baysor run \
@@ -101,11 +200,11 @@ baysor-cpp supports on-the-fly spatial filtering during input loading. This is u
   --x-min 0 --x-max 2000 \
   --y-min 0 --y-max 2000 \
   -o ./tests/crop_cell_boundaries \
-  ./data/transcripts.parquet \
+  ./data/experiment.xenium \
   ./data/cell_boundaries.parquet
 ```
 
-### Crop without priors
+### Crop Without Priors
 
 ```bash
 ../../build/baysor run \
@@ -114,11 +213,31 @@ baysor-cpp supports on-the-fly spatial filtering during input loading. This is u
   --y-min 0 --y-max 2000 \
   --scale 4.5 \
   -o ./tests/crop_no_prior \
-  ./data/transcripts.parquet
+  ./data/experiment.xenium
 ```
+
+Do not use cropped runs as the input to `xeniumranger import-segmentation`.
+
+## Visual QC Helper
+
+The repo also includes a Xenium visualization helper for rendering fixed example
+regions from a Baysor run:
+
+```bash
+.venv-vis/bin/python ../../scripts/visualize_xenium_examples.py \
+  -n 10 \
+  ./tests/full_cellid/segmentation.csv
+```
+
+This renders side-by-side Baysor / Xenium comparison panels using the Xenium
+morphology images as background when the required Python packages are available.
 
 ## Notes
 
-- `:cell_id` is usually the fastest Xenium prior mode, because the prior labels are already attached to each transcript row.
-- `cell_boundaries.parquet` and `nucleus_boundaries.parquet` are direct geometric priors and can be useful when you want the segmentation to follow the published Xenium polygons more explicitly.
-- `configs/xenium.toml` contains the Xenium column mapping and default transcript filters used in these commands.
+- `:cell_id` is usually the fastest Xenium prior mode, because the prior labels
+  are already attached to each transcript row.
+- `cell_boundaries.parquet` and `nucleus_boundaries.parquet` are direct
+  geometric priors and can be useful when you want the segmentation to follow
+  the published Xenium polygons more explicitly.
+- `configs/xenium.toml` contains the Xenium column mapping and default
+  transcript filters used in these commands.

@@ -11,6 +11,14 @@ namespace baysor {
 
 struct MoleculeData;
 
+enum class OutputStyle {
+    Legacy,
+    Parquet
+};
+
+OutputStyle parse_output_style(const std::string& style);
+std::string to_string(OutputStyle style);
+
 /// Output file paths (mirrors Julia OutputPaths)
 struct OutputPaths {
     std::string segmented_df;
@@ -24,7 +32,9 @@ struct OutputPaths {
     std::string log_file;      ///< segmentation_log.log
 };
 
-OutputPaths get_output_paths(const std::string& base_path, const std::string& count_matrix_format);
+OutputPaths get_output_paths(const std::string& base_path,
+                             OutputStyle style,
+                             const std::string& count_matrix_format);
 
 /// Save segmented molecule table to CSV.
 /// Optional columns: ncv_color (hex strings), assignment_confidence (0..1),
@@ -37,11 +47,24 @@ void save_segmented_df(const MoleculeData& data,
                        const std::vector<double>* assignment_confidence = nullptr,
                        const std::vector<int>* cluster = nullptr);
 
+void save_segmented_df_parquet(const MoleculeData& data,
+                               const std::vector<int>& assignment,
+                               const std::vector<std::string>& gene_names,
+                               const std::string& path,
+                               const std::vector<std::string>* ncv_color = nullptr,
+                               const std::vector<double>* assignment_confidence = nullptr,
+                               const std::vector<int>* cluster = nullptr);
+
 /// Save cell statistics to CSV
 void save_cell_stat_df(const Eigen::MatrixXd& stats,
                        const std::vector<std::string>& cell_names,
                        const std::vector<std::string>& col_names,
                        const std::string& path);
+
+void save_cell_stat_df_parquet(const Eigen::MatrixXd& stats,
+                               const std::vector<std::string>& cell_names,
+                               const std::vector<std::string>& col_names,
+                               const std::string& path);
 
 /// Per-column attributes that can be written into a Loom col_attrs group.
 /// Each value is either a vector of strings or a vector of doubles.
@@ -57,6 +80,11 @@ void save_matrix_to_loom(const Eigen::SparseMatrix<float>& matrix,
                          const std::string& path,
                          const LoomColAttrs& col_attrs = {});
 
+void save_matrix_to_10x_h5(const Eigen::SparseMatrix<float>& matrix,
+                           const std::vector<std::string>& gene_names,
+                           const std::vector<std::string>& cell_names,
+                           const std::string& path);
+
 /// Save count matrix to TSV
 void save_matrix_to_tsv(const Eigen::SparseMatrix<double>& matrix,
                         const std::vector<std::string>& gene_names,
@@ -68,10 +96,18 @@ void save_polygons_geojson(const PolygonCollection& polygons,
                            const std::string& path,
                            const std::string& format = "FeatureCollection");
 
+void save_polygons_geoparquet(const PolygonCollection& polygons,
+                              const std::string& path,
+                              const std::string& geometry_name = "geometry");
+
 /// Save a 3D polygon stack as Julia-style split outputs:
 /// 2D polygons go to polygons_2d, per-z polygons go to polygons_3d.
 void save_polygon_stack_geojson(const PolygonStack& polygons,
                                 const OutputPaths& out_paths,
                                 const std::string& format = "FeatureCollection");
+
+void save_polygon_stack_geoparquet(const PolygonStack& polygons,
+                                   const OutputPaths& out_paths,
+                                   const std::string& geometry_name = "geometry");
 
 } // namespace baysor

@@ -1,16 +1,178 @@
 #include "baysor/reporting/output.h"
 #include "baysor/data_loading/data.h"
 
+#include <arrow/api.h>
+#include <arrow/io/api.h>
+#include <parquet/arrow/writer.h>
 #include <hdf5.h>
 #include <nlohmann/json.hpp>
 
-#include <cstdio>
+#include <algorithm>
+#include <array>
 #include <cmath>
+#include <cstdint>
 #include <fstream>
 #include <stdexcept>
 #include <string>
 
 namespace baysor {
+
+namespace {
+
+template<class T>
+T arrow_unwrap(arrow::Result<T>&& result, const char* ctx) {
+    if (!result.ok()) {
+        throw std::runtime_error(std::string(ctx) + ": " + result.status().ToString());
+    }
+    return std::move(*result);
+}
+
+void arrow_check(const arrow::Status& status, const char* ctx) {
+    if (!status.ok()) {
+        throw std::runtime_error(std::string(ctx) + ": " + status.ToString());
+    }
+}
+
+std::vector<std::array<double, 2>> polygon_vertices(const Eigen::MatrixXd& poly) {
+    std::vector<std::array<double, 2>> vertices;
+    if (poly.rows() == 2) {
+        vertices.reserve(static_cast<size_t>(poly.cols()));
+        for (int j = 0; j < poly.cols(); ++j) {
+            vertices.push_back({poly(0, j), poly(1, j)});
+        }
+    } else if (poly.cols() == 2) {
+        vertices.reserve(static_cast<size_t>(poly.rows()));
+        for (int i = 0; i < poly.rows(); ++i) {
+            vertices.push_back({poly(i, 0), poly(i, 1)});
+        }
+    }
+    if (vertices.size() >= 3) {
+        const auto& first = vertices.front();
+        const auto& last = vertices.back();
+        if (std::abs(first[0] - last[0]) > 1e-9 || std::abs(first[1] - last[1]) > 1e-9) {
+            vertices.push_back(first);
+        }
+    }
+    return vertices;
+}
+
+template<class T>
+void append_le(std::string& out, T value) {
+    const char* ptr = reinterpret_cast<const char*>(&value);
+    out.append(ptr, ptr + sizeof(T));
+}
+
+std::string polygon_to_wkb(const Eigen::MatrixXd& poly) {
+    const auto vertices = polygon_vertices(poly);
+    if (vertices.size() < 4) {
+        return {};
+    }
+
+    std::string out;
+    out.reserve(1 + 4 + 4 + 4 + vertices.size() * 16);
+    append_le<std::uint8_t>(out, 1);          // little endian
+    append_le<std::uint32_t>(out, 3);         // Polygon
+    append_le<std::uint32_t>(out, 1);         // one ring
+    append_le<std::uint32_t>(out, static_cast<std::uint32_t>(vertices.size()));
+    for (const auto& xy : vertices) {
+        append_le<double>(out, xy[0]);
+        append_le<double>(out, xy[1]);
+    }
+    return out;
+}
+
+std::shared_ptr<arrow::Table> make_table(
+    const std::vector<std::shared_ptr<arrow::Field>>& fields,
+    const std::vector<std::shared_ptr<arrow::Array>>& arrays,
+    std::shared_ptr<arrow::KeyValueMetadata> metadata = nullptr
+) {
+    auto schema = std::make_shared<arrow::Schema>(fields, metadata);
+    return arrow::Table::Make(schema, arrays);
+}
+
+void write_parquet_table(const std::shared_ptr<arrow::Table>& table, const std::string& path) {
+    auto sink = arrow_unwrap(arrow::io::FileOutputStream::Open(path), "Open parquet output");
+    auto writer = arrow_unwrap(
+        parquet::arrow::FileWriter::Open(*table->schema(), arrow::default_memory_pool(), sink),
+        "Open parquet writer");
+    if (table->schema()->metadata()) {
+        arrow_check(writer->AddKeyValueMetadata(table->schema()->metadata()),
+                    "Attach parquet metadata");
+    }
+    arrow_check(writer->WriteTable(*table, std::max<int64_t>(1, std::min<int64_t>(table->num_rows(), 65536))),
+                "Write parquet table");
+    arrow_check(writer->Close(), "Close parquet writer");
+    arrow_check(sink->Close(), "Close parquet output");
+}
+
+std::shared_ptr<arrow::Array> build_string_array(const std::vector<std::string>& values) {
+    arrow::StringBuilder builder;
+    arrow_check(builder.Reserve(static_cast<int64_t>(values.size())), "Reserve string builder");
+    for (const auto& v : values) arrow_check(builder.Append(v), "Append string");
+    return arrow_unwrap(builder.Finish(), "Finish string array");
+}
+
+std::shared_ptr<arrow::Array> build_double_array(const std::vector<double>& values) {
+    arrow::DoubleBuilder builder;
+    arrow_check(builder.Reserve(static_cast<int64_t>(values.size())), "Reserve double builder");
+    for (double v : values) arrow_check(builder.Append(v), "Append double");
+    return arrow_unwrap(builder.Finish(), "Finish double array");
+}
+
+std::shared_ptr<arrow::Array> build_int32_array(const std::vector<int>& values) {
+    arrow::Int32Builder builder;
+    arrow_check(builder.Reserve(static_cast<int64_t>(values.size())), "Reserve int32 builder");
+    for (int v : values) arrow_check(builder.Append(v), "Append int32");
+    return arrow_unwrap(builder.Finish(), "Finish int32 array");
+}
+
+std::shared_ptr<arrow::Array> build_bool_array(const std::vector<bool>& values) {
+    arrow::BooleanBuilder builder;
+    arrow_check(builder.Reserve(static_cast<int64_t>(values.size())), "Reserve bool builder");
+    for (bool v : values) arrow_check(builder.Append(v), "Append bool");
+    return arrow_unwrap(builder.Finish(), "Finish bool array");
+}
+
+std::shared_ptr<arrow::Array> build_binary_array(const std::vector<std::string>& values) {
+    arrow::BinaryBuilder builder;
+    arrow_check(builder.Reserve(static_cast<int64_t>(values.size())), "Reserve binary builder");
+    for (const auto& v : values) {
+        arrow_check(builder.Append(reinterpret_cast<const std::uint8_t*>(v.data()),
+                                   static_cast<int32_t>(v.size())), "Append binary");
+    }
+    return arrow_unwrap(builder.Finish(), "Finish binary array");
+}
+
+std::shared_ptr<arrow::KeyValueMetadata> make_geoparquet_metadata(const std::string& geometry_name) {
+    nlohmann::json geo = {
+        {"version", "1.1.0"},
+        {"primary_column", geometry_name},
+        {"columns", {
+            {geometry_name, {
+                {"encoding", "WKB"},
+                {"geometry_types", nlohmann::json::array({"Polygon"})},
+                {"crs", nullptr}
+            }}
+        }}
+    };
+    return arrow::key_value_metadata({"geo"}, {geo.dump()});
+}
+
+} // namespace
+
+OutputStyle parse_output_style(const std::string& style) {
+    if (style == "legacy") return OutputStyle::Legacy;
+    if (style == "parquet") return OutputStyle::Parquet;
+    throw std::invalid_argument("Unknown output style: " + style);
+}
+
+std::string to_string(OutputStyle style) {
+    switch (style) {
+        case OutputStyle::Legacy: return "legacy";
+        case OutputStyle::Parquet: return "parquet";
+    }
+    return "legacy";
+}
 
 static nlohmann::json polygons_to_geojson_json(
     const PolygonCollection& polygons,
@@ -55,7 +217,10 @@ static nlohmann::json polygons_to_geojson_json(
             out["features"].push_back({
                 {"type", "Feature"},
                 {"id", cell_name},
-                {"geometry", geom}
+                {"geometry", geom},
+                {"properties", {
+                    {"cell", cell_name}
+                }}
             });
         } else {
             out["geometries"].push_back({
@@ -242,17 +407,101 @@ void save_matrix_to_loom(
     H5Fclose(fid);
 }
 
+void save_matrix_to_10x_h5(
+    const Eigen::SparseMatrix<float>& matrix,   // n_cells x n_genes
+    const std::vector<std::string>& gene_names,
+    const std::vector<std::string>& cell_names,
+    const std::string& path
+) {
+    const int n_cells = static_cast<int>(matrix.rows());
+    const int n_genes = static_cast<int>(matrix.cols());
+
+    Eigen::SparseMatrix<float> feature_by_cell = matrix.transpose(); // n_genes x n_cells
+    feature_by_cell.makeCompressed();
+
+    std::vector<int32_t> data(feature_by_cell.nonZeros());
+    std::vector<int32_t> indices(feature_by_cell.nonZeros());
+    std::vector<int64_t> indptr(n_cells + 1);
+    for (int k = 0; k < feature_by_cell.nonZeros(); ++k) {
+        data[k] = static_cast<int32_t>(std::lround(feature_by_cell.valuePtr()[k]));
+        indices[k] = static_cast<int32_t>(feature_by_cell.innerIndexPtr()[k]);
+    }
+    for (int k = 0; k < n_cells + 1; ++k) {
+        indptr[k] = static_cast<int64_t>(feature_by_cell.outerIndexPtr()[k]);
+    }
+    std::vector<int64_t> shape = {
+        static_cast<int64_t>(n_genes), static_cast<int64_t>(n_cells)
+    };
+
+    hid_t fid = H5Fcreate(path.c_str(), H5F_ACC_TRUNC, H5P_DEFAULT, H5P_DEFAULT);
+    check(fid, "H5Fcreate 10x h5");
+
+    hid_t matrix_grp = H5Gcreate2(fid, "matrix", H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
+    check(matrix_grp, "create /matrix");
+    hid_t features_grp = H5Gcreate2(matrix_grp, "features", H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
+    check(features_grp, "create /matrix/features");
+
+    write_vlen_strings(matrix_grp, "barcodes", cell_names);
+    write_vlen_strings(features_grp, "id", gene_names);
+    write_vlen_strings(features_grp, "name", gene_names);
+    write_vlen_strings(features_grp, "feature_type", std::vector<std::string>(gene_names.size(), "Gene Expression"));
+    write_vlen_strings(features_grp, "genome", std::vector<std::string>(gene_names.size(), ""));
+
+    auto write_int32 = [](hid_t grp, const char* name, const std::vector<int32_t>& vals) {
+        hsize_t dim = vals.size();
+        hid_t space = H5Screate_simple(1, &dim, nullptr);
+        hid_t ds = H5Dcreate2(grp, name, H5T_NATIVE_INT32, space,
+                              H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
+        check(ds, name);
+        check(H5Dwrite(ds, H5T_NATIVE_INT32, H5S_ALL, H5S_ALL, H5P_DEFAULT, vals.data()), name);
+        H5Dclose(ds);
+        H5Sclose(space);
+    };
+    auto write_int64 = [](hid_t grp, const char* name, const std::vector<int64_t>& vals) {
+        hsize_t dim = vals.size();
+        hid_t space = H5Screate_simple(1, &dim, nullptr);
+        hid_t ds = H5Dcreate2(grp, name, H5T_NATIVE_INT64, space,
+                              H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
+        check(ds, name);
+        check(H5Dwrite(ds, H5T_NATIVE_INT64, H5S_ALL, H5S_ALL, H5P_DEFAULT, vals.data()), name);
+        H5Dclose(ds);
+        H5Sclose(space);
+    };
+
+    write_int32(matrix_grp, "data", data);
+    write_int32(matrix_grp, "indices", indices);
+    write_int64(matrix_grp, "indptr", indptr);
+    write_int64(matrix_grp, "shape", shape);
+
+    H5Gclose(features_grp);
+    H5Gclose(matrix_grp);
+    H5Fclose(fid);
+}
+
 // ============================================================================
 // get_output_paths
 // ============================================================================
 
 OutputPaths get_output_paths(const std::string& base_path,
+                              OutputStyle style,
                               const std::string& count_matrix_format) {
     // Strip trailing slash if present
     std::string base = base_path;
     while (!base.empty() && (base.back() == '/' || base.back() == '\\')) base.pop_back();
 
     OutputPaths p;
+    if (style == OutputStyle::Parquet) {
+        p.segmented_df       = base + "/molecules.parquet";
+        p.cell_stats         = base + "/cells.parquet";
+        p.diagnostic_report  = base + "/diagnostic_report.html";
+        p.molecule_plot      = base + "/segmentation_plot.html";
+        p.polygons_2d        = base + "/cell_boundaries.parquet";
+        p.polygons_3d        = base + "/cell_boundaries_3d.parquet";
+        p.params_dump        = base + "/run_params.toml";
+        p.log_file           = base + "/run.log";
+        p.counts             = base + "/feature_matrix.h5";
+        return p;
+    }
     p.segmented_df       = base + "/segmentation.csv";
     p.cell_stats         = base + "/segmentation_cell_stats.csv";
     p.diagnostic_report  = base + "/diagnostic_report.html";
@@ -289,8 +538,10 @@ void save_segmented_df(const MoleculeData& data,
     bool has_col  = ncv_color && !ncv_color->empty();
     bool has_ac   = assignment_confidence && !assignment_confidence->empty();
     bool has_cl   = cluster && !cluster->empty();
+    bool has_tid  = data.source_transcript_id.size() == static_cast<size_t>(data.n_molecules());
 
     // Header
+    if (has_tid) f << "transcript_id,";
     f << "cell,gene,x,y";
     if (has_z)    f << ",z";
     if (has_conf) f << ",confidence";
@@ -307,14 +558,83 @@ void save_segmented_df(const MoleculeData& data,
         std::string gene_name = (g > 0 && g <= static_cast<int>(gene_names.size()))
                                 ? gene_names[g - 1] : std::to_string(g);
 
+        if (has_tid) f << data.source_transcript_id[i] << ',';
         f << cell_name << ',' << gene_name << ',' << data.x[i] << ',' << data.y[i];
         if (has_z)    f << ',' << data.z[i];
         if (has_conf) f << ',' << data.confidence[i];
         if (has_cl)   f << ',' << (*cluster)[i];
         if (has_col)  f << ',' << (*ncv_color)[i];
         if (has_ac)   f << ',' << (*assignment_confidence)[i];
-        f << ',' << (cell == 0 ? 1 : 0) << '\n';
+        if (has_tid) {
+            f << ',' << (cell == 0 ? "true" : "false") << '\n';
+        } else {
+            f << ',' << (cell == 0 ? 1 : 0) << '\n';
+        }
     }
+}
+
+void save_segmented_df_parquet(const MoleculeData& data,
+                               const std::vector<int>& assignment,
+                               const std::vector<std::string>& gene_names,
+                               const std::string& path,
+                               const std::vector<std::string>* ncv_color,
+                               const std::vector<double>* assignment_confidence,
+                               const std::vector<int>* cluster) {
+    const bool has_z = data.is_3d();
+    const bool has_conf = !data.confidence.empty();
+    const bool has_col = ncv_color && !ncv_color->empty();
+    const bool has_ac = assignment_confidence && !assignment_confidence->empty();
+    const bool has_cl = cluster && !cluster->empty();
+    const int n = data.n_molecules();
+
+    std::vector<std::string> cells(n);
+    std::vector<std::string> genes(n);
+    std::vector<bool> is_noise(n);
+    for (int i = 0; i < n; ++i) {
+        int cell = assignment[i];
+        cells[i] = (cell > 0) ? ("cell_" + std::to_string(cell)) : "0";
+        int g = data.gene[i];
+        genes[i] = (g > 0 && g <= static_cast<int>(gene_names.size()))
+                 ? gene_names[g - 1] : std::to_string(g);
+        is_noise[i] = (cell == 0);
+    }
+
+    std::vector<std::shared_ptr<arrow::Field>> fields = {
+        arrow::field("cell", arrow::utf8()),
+        arrow::field("gene", arrow::utf8()),
+        arrow::field("x", arrow::float64()),
+        arrow::field("y", arrow::float64())
+    };
+    std::vector<std::shared_ptr<arrow::Array>> arrays = {
+        build_string_array(cells),
+        build_string_array(genes),
+        build_double_array(data.x),
+        build_double_array(data.y)
+    };
+    if (has_z) {
+        fields.push_back(arrow::field("z", arrow::float64()));
+        arrays.push_back(build_double_array(data.z));
+    }
+    if (has_conf) {
+        fields.push_back(arrow::field("confidence", arrow::float64()));
+        arrays.push_back(build_double_array(data.confidence));
+    }
+    if (has_cl) {
+        fields.push_back(arrow::field("cluster", arrow::int32()));
+        arrays.push_back(build_int32_array(*cluster));
+    }
+    if (has_col) {
+        fields.push_back(arrow::field("ncv_color", arrow::utf8()));
+        arrays.push_back(build_string_array(*ncv_color));
+    }
+    if (has_ac) {
+        fields.push_back(arrow::field("assignment_confidence", arrow::float64()));
+        arrays.push_back(build_double_array(*assignment_confidence));
+    }
+    fields.push_back(arrow::field("is_noise", arrow::boolean()));
+    arrays.push_back(build_bool_array(is_noise));
+
+    write_parquet_table(make_table(fields, arrays), path);
 }
 
 // ============================================================================
@@ -339,6 +659,26 @@ void save_cell_stat_df(const Eigen::MatrixXd& stats,
         for (int c = 0; c < nc; ++c) f << ',' << stats(r, c);
         f << '\n';
     }
+}
+
+void save_cell_stat_df_parquet(const Eigen::MatrixXd& stats,
+                               const std::vector<std::string>& cell_names,
+                               const std::vector<std::string>& col_names,
+                               const std::string& path) {
+    std::vector<std::shared_ptr<arrow::Field>> fields;
+    std::vector<std::shared_ptr<arrow::Array>> arrays;
+
+    fields.push_back(arrow::field("cell", arrow::utf8()));
+    arrays.push_back(build_string_array(cell_names));
+
+    for (int c = 0; c < stats.cols(); ++c) {
+        std::vector<double> col(stats.rows());
+        for (int r = 0; r < stats.rows(); ++r) col[r] = stats(r, c);
+        fields.push_back(arrow::field(col_names[c], arrow::float64()));
+        arrays.push_back(build_double_array(col));
+    }
+
+    write_parquet_table(make_table(fields, arrays), path);
 }
 
 // ============================================================================
@@ -386,6 +726,46 @@ void save_polygons_geojson(const PolygonCollection& polygons,
     f << polygons_to_geojson_json(polygons, format).dump();
 }
 
+void save_polygons_geoparquet(const PolygonCollection& polygons,
+                              const std::string& path,
+                              const std::string& geometry_name) {
+    if (polygons.empty()) return;
+
+    std::vector<std::string> cells;
+    std::vector<int> n_vertices;
+    std::vector<std::string> wkbs;
+    cells.reserve(polygons.size());
+    n_vertices.reserve(polygons.size());
+    wkbs.reserve(polygons.size());
+
+    for (const auto& [cell_name, poly] : polygons) {
+        auto vertices = polygon_vertices(poly);
+        if (vertices.size() < 4) continue;
+        std::string wkb = polygon_to_wkb(poly);
+        if (wkb.empty()) continue;
+        cells.push_back(cell_name);
+        n_vertices.push_back(static_cast<int>(vertices.size() - 1));
+        wkbs.push_back(std::move(wkb));
+    }
+    if (cells.empty()) return;
+
+    auto metadata = make_geoparquet_metadata(geometry_name);
+    auto table = make_table(
+        {
+            arrow::field("cell", arrow::utf8()),
+            arrow::field("n_vertices", arrow::int32()),
+            arrow::field(geometry_name, arrow::binary())
+        },
+        {
+            build_string_array(cells),
+            build_int32_array(n_vertices),
+            build_binary_array(wkbs)
+        },
+        metadata
+    );
+    write_parquet_table(table, path);
+}
+
 void save_polygon_stack_geojson(const PolygonStack& polygons,
                                 const OutputPaths& out_paths,
                                 const std::string& format) {
@@ -408,6 +788,58 @@ void save_polygon_stack_geojson(const PolygonStack& polygons,
     std::ofstream f(out_paths.polygons_3d);
     if (!f) throw std::runtime_error("save_polygon_stack_geojson: cannot open " + out_paths.polygons_3d);
     f << by_layer.dump();
+}
+
+void save_polygon_stack_geoparquet(const PolygonStack& polygons,
+                                   const OutputPaths& out_paths,
+                                   const std::string& geometry_name) {
+    if (polygons.empty()) return;
+
+    PolygonCollection combined_2d;
+    std::vector<std::string> cells;
+    std::vector<std::string> layers;
+    std::vector<std::string> wkbs;
+    std::vector<int> n_vertices;
+
+    for (const auto& [layer_name, poly] : polygons) {
+        if (layer_name == "2d") {
+            combined_2d = poly;
+            continue;
+        }
+        for (const auto& [cell_name, geom] : poly) {
+            auto vertices = polygon_vertices(geom);
+            if (vertices.size() < 4) continue;
+            auto wkb = polygon_to_wkb(geom);
+            if (wkb.empty()) continue;
+            cells.push_back(cell_name);
+            layers.push_back(layer_name);
+            n_vertices.push_back(static_cast<int>(vertices.size() - 1));
+            wkbs.push_back(std::move(wkb));
+        }
+    }
+
+    if (!combined_2d.empty()) {
+        save_polygons_geoparquet(combined_2d, out_paths.polygons_2d, geometry_name);
+    }
+    if (cells.empty()) return;
+
+    auto metadata = make_geoparquet_metadata(geometry_name);
+    auto table = make_table(
+        {
+            arrow::field("cell", arrow::utf8()),
+            arrow::field("layer", arrow::utf8()),
+            arrow::field("n_vertices", arrow::int32()),
+            arrow::field(geometry_name, arrow::binary())
+        },
+        {
+            build_string_array(cells),
+            build_string_array(layers),
+            build_int32_array(n_vertices),
+            build_binary_array(wkbs)
+        },
+        metadata
+    );
+    write_parquet_table(table, out_paths.polygons_3d);
 }
 
 } // namespace baysor

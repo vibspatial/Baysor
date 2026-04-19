@@ -2,10 +2,13 @@
 
 #include <arrow/api.h>
 #include <arrow/io/api.h>
+#include <parquet/file_reader.h>
+#include <parquet/arrow/reader.h>
 #include "baysor/data_loading/data.h"
 #include "baysor/data_loading/prior_segmentation.h"
 #include "baysor/utils/general.h"
 #include "baysor/utils/options.h"
+#include "baysor/utils/xenium.h"
 #include "baysor/processing/utils/utils.h"
 #include "baysor/processing/data_processing/triangulation.h"
 #include "baysor/processing/data_processing/boundary_estimation.h"
@@ -28,12 +31,14 @@
 #include <fstream>
 #include <sstream>
 #include <string>
+#include <filesystem>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
 #include <cstdio>
 #include <random>
 #include <parquet/arrow/writer.h>
+#include <hdf5.h>
 #include <tiffio.h>
 
 // Helper: write a temp CSV file and return its path
@@ -1699,6 +1704,159 @@ TEST(Output, SavePolygonsGeoJsonKeepsTriangleFeature) {
 
     EXPECT_NE(s.find("\"type\":\"FeatureCollection\""), std::string::npos);
     EXPECT_NE(s.find("\"id\":\"cell_1\""), std::string::npos);
+    EXPECT_NE(s.find("\"properties\":{\"cell\":\"cell_1\"}"), std::string::npos);
+}
+
+TEST(Output, ParseOutputStyle) {
+    EXPECT_EQ(baysor::parse_output_style("legacy"), baysor::OutputStyle::Legacy);
+    EXPECT_EQ(baysor::parse_output_style("parquet"), baysor::OutputStyle::Parquet);
+    EXPECT_THROW(baysor::parse_output_style("xenium"), std::invalid_argument);
+    EXPECT_THROW(baysor::parse_output_style("csv"), std::invalid_argument);
+}
+
+TEST(Output, GetOutputPathsSupportsLegacyAndParquetStyles) {
+    auto legacy = baysor::get_output_paths("out_dir/", baysor::OutputStyle::Legacy, "tsv");
+    EXPECT_EQ(legacy.segmented_df, "out_dir/segmentation.csv");
+    EXPECT_EQ(legacy.cell_stats, "out_dir/segmentation_cell_stats.csv");
+    EXPECT_EQ(legacy.polygons_2d, "out_dir/segmentation_polygons_2d.json");
+    EXPECT_EQ(legacy.polygons_3d, "out_dir/segmentation_polygons_3d.json");
+    EXPECT_EQ(legacy.counts, "out_dir/segmentation_counts.tsv");
+    EXPECT_EQ(legacy.params_dump, "out_dir/segmentation_params.dump.toml");
+    EXPECT_EQ(legacy.log_file, "out_dir/segmentation_log.log");
+
+    auto parquet = baysor::get_output_paths("out_dir/", baysor::OutputStyle::Parquet, "loom");
+    EXPECT_EQ(parquet.segmented_df, "out_dir/molecules.parquet");
+    EXPECT_EQ(parquet.cell_stats, "out_dir/cells.parquet");
+    EXPECT_EQ(parquet.polygons_2d, "out_dir/cell_boundaries.parquet");
+    EXPECT_EQ(parquet.polygons_3d, "out_dir/cell_boundaries_3d.parquet");
+    EXPECT_EQ(parquet.counts, "out_dir/feature_matrix.h5");
+    EXPECT_EQ(parquet.params_dump, "out_dir/run_params.toml");
+    EXPECT_EQ(parquet.log_file, "out_dir/run.log");
+
+}
+
+TEST(Output, SaveSegmentedDfAddsTranscriptIdForXeniumLikeInput) {
+    baysor::MoleculeData data;
+    data.x = {1.0, 2.0};
+    data.y = {3.0, 4.0};
+    data.gene = {1, 1};
+    data.gene_names = {"MALAT1"};
+    data.source_transcript_id = {281474976710656ULL, 281474976710657ULL};
+
+    std::vector<int> assignment = {1, 0};
+    const std::string path = write_temp_csv("", ".csv");
+    baysor::save_segmented_df(data, assignment, data.gene_names, path);
+
+    std::ifstream f(path);
+    ASSERT_TRUE(f.good());
+    std::stringstream buf;
+    buf << f.rdbuf();
+    const std::string s = buf.str();
+
+    EXPECT_NE(s.find("transcript_id,cell,gene,x,y,is_noise"), std::string::npos);
+    EXPECT_NE(s.find("281474976710656,cell_1,MALAT1,1,3,false"), std::string::npos);
+    EXPECT_NE(s.find("281474976710657,0,MALAT1,2,4,true"), std::string::npos);
+}
+
+TEST(Output, SavePolygonsGeoParquetWritesGeometryMetadata) {
+    baysor::PolygonCollection polygons;
+    Eigen::MatrixXd tri(2, 3);
+    tri <<
+        0.0, 1.0, 0.0,
+        0.0, 0.0, 1.0;
+    polygons["cell_1"] = tri;
+
+    const std::string path = write_temp_csv("", ".parquet");
+    baysor::save_polygons_geoparquet(polygons, path);
+
+    auto infile = arrow_test_unwrap(arrow::io::ReadableFile::Open(path));
+    auto reader = arrow_test_unwrap(parquet::arrow::OpenFile(infile, arrow::default_memory_pool()));
+    auto pq_reader = parquet::ParquetFileReader::Open(infile);
+    auto kv = pq_reader->metadata()->key_value_metadata();
+    ASSERT_NE(kv, nullptr);
+    ASSERT_GE(kv->size(), 1);
+    bool saw_geo = false;
+    for (int i = 0; i < kv->size(); ++i) {
+        if (kv->key(i) == "geo") {
+            saw_geo = true;
+            EXPECT_NE(kv->value(i).find("\"primary_column\":\"geometry\""), std::string::npos);
+        }
+    }
+    EXPECT_TRUE(saw_geo);
+
+    std::shared_ptr<arrow::Table> table;
+    arrow_expect_ok(reader->ReadTable(&table));
+    ASSERT_NE(table, nullptr);
+    EXPECT_EQ(table->num_rows(), 1);
+    EXPECT_EQ(table->num_columns(), 3);
+    EXPECT_EQ(table->schema()->field(0)->name(), "cell");
+    EXPECT_EQ(table->schema()->field(1)->name(), "n_vertices");
+    EXPECT_EQ(table->schema()->field(2)->name(), "geometry");
+}
+
+TEST(Output, SaveMatrixTo10xH5WritesExpectedStructure) {
+    Eigen::SparseMatrix<float> matrix(2, 3);  // cells x genes
+    std::vector<Eigen::Triplet<float>> trips = {
+        {0, 0, 2.0f},
+        {0, 2, 5.0f},
+        {1, 1, 7.0f}
+    };
+    matrix.setFromTriplets(trips.begin(), trips.end());
+    matrix.makeCompressed();
+
+    const std::vector<std::string> gene_names = {"G1", "G2", "G3"};
+    const std::vector<std::string> cell_names = {"cell_1", "cell_2"};
+    const std::string path = write_temp_csv("", ".h5");
+
+    baysor::save_matrix_to_10x_h5(matrix, gene_names, cell_names, path);
+
+    hid_t fid = H5Fopen(path.c_str(), H5F_ACC_RDONLY, H5P_DEFAULT);
+    ASSERT_GE(fid, 0);
+
+    hid_t shape_ds = H5Dopen2(fid, "/matrix/shape", H5P_DEFAULT);
+    ASSERT_GE(shape_ds, 0);
+    std::vector<int64_t> shape(2, -1);
+    ASSERT_GE(H5Dread(shape_ds, H5T_NATIVE_INT64, H5S_ALL, H5S_ALL, H5P_DEFAULT, shape.data()), 0);
+    EXPECT_EQ(shape[0], 3);
+    EXPECT_EQ(shape[1], 2);
+    H5Dclose(shape_ds);
+
+    hid_t data_ds = H5Dopen2(fid, "/matrix/data", H5P_DEFAULT);
+    ASSERT_GE(data_ds, 0);
+    hid_t data_space = H5Dget_space(data_ds);
+    hsize_t data_dims[1] = {0};
+    ASSERT_EQ(H5Sget_simple_extent_ndims(data_space), 1);
+    ASSERT_EQ(H5Sget_simple_extent_dims(data_space, data_dims, nullptr), 1);
+    EXPECT_EQ(data_dims[0], 3);
+    H5Sclose(data_space);
+    H5Dclose(data_ds);
+
+    hid_t feat_name_ds = H5Dopen2(fid, "/matrix/features/name", H5P_DEFAULT);
+    ASSERT_GE(feat_name_ds, 0);
+    hid_t feat_name_space = H5Dget_space(feat_name_ds);
+    hsize_t feat_dims[1] = {0};
+    ASSERT_EQ(H5Sget_simple_extent_ndims(feat_name_space), 1);
+    ASSERT_EQ(H5Sget_simple_extent_dims(feat_name_space, feat_dims, nullptr), 1);
+    EXPECT_EQ(feat_dims[0], 3);
+    H5Sclose(feat_name_space);
+    H5Dclose(feat_name_ds);
+
+    H5Fclose(fid);
+}
+
+TEST(Xenium, ManifestHelpers) {
+    EXPECT_TRUE(baysor::is_xenium_manifest_path("experiment.xenium"));
+    EXPECT_FALSE(baysor::is_xenium_manifest_path("transcripts.parquet"));
+
+    const std::string manifest_path =
+        "../examples/Xenium_pancreas_membrane_377/data/experiment.xenium";
+    auto ctx = baysor::load_xenium_manifest_context(
+        manifest_path);
+    EXPECT_EQ(ctx.manifest_path, manifest_path);
+    EXPECT_EQ(ctx.dataset_dir,
+              "../examples/Xenium_pancreas_membrane_377/data");
+    EXPECT_EQ(ctx.transcripts_path,
+              "../examples/Xenium_pancreas_membrane_377/data/transcripts.parquet");
 }
 
 // ============================================================================
