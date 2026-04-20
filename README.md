@@ -6,7 +6,23 @@
 
 Baysor segments imaging-based spatial transcriptomics data using spatial position, local gene composition, and optional prior segmentation masks.
 
-This `cpp` branch is a native C++ port of the main Baysor implementation on [`master`](https://github.com/kharchenkolab/Baysor/tree/master). It is built with CMake.
+This `cpp` branch contains the first C++ port of Baysor.
+
+The current goal of this branch is to preserve the core segmentation algorithm
+of the current Baysor release line on `master` (`v0.7.1`), while improving the
+implementation around it:
+
+- native C++17 / CMake build
+- substantial performance and memory optimizations
+- `legacy` and `parquet` output styles
+- Parquet / GeoParquet output support
+- direct `experiment.xenium` input resolution
+- documented Xenium workflow via `xeniumranger import-segmentation`
+- the `run`, `preview`, and `segfree` subcommands in one native binary
+
+Future C++ releases may diverge algorithmically, but this first release is
+intended as a faithful C++ implementation of the current Baysor algorithm with
+a more efficient runtime and broader modern I/O support.
 
 ## Usage
 
@@ -26,6 +42,20 @@ Example datasets and runnable commands:
 User-facing documentation for this branch:
 
 - [docs/README.md](docs/README.md)
+
+## Highlights
+
+- **Algorithmic continuity**: follows the Baysor `v0.7.1` segmentation
+  algorithmic line while reimplementing it in C++.
+- **Performance work**: reduces memory pressure in clustering, segmentation,
+  NCV computation, and Loom writing, and improves Parquet loading.
+- **Modern output support**: keeps the familiar `legacy` bundle and adds a
+  `parquet` bundle with Parquet / GeoParquet tables and a 10x-style HDF5 count
+  matrix.
+- **Xenium workflow**: accepts `experiment.xenium` directly and documents the
+  recommended Xenium Explorer handoff through `xeniumranger import-segmentation`.
+- **Volumetric support**: includes 3D handling and polygon output for datasets
+  such as STARmap.
 
 ## Build
 

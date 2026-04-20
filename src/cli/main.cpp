@@ -874,59 +874,57 @@ int main(int argc, char* argv[]) {
     };
 
     // Dispatch
-    if (run->parsed()) {
-        OutputStyle output_style;
-        try {
-            output_style = parse_output_style(run_output_style);
-        } catch (const std::exception& e) {
-            spdlog::error("{}", e.what());
-            return 1;
-        }
-        std::string resolved_run_input = run_coordinates;
-        try {
-            resolved_run_input = resolve_xenium_input(run_coordinates);
-        } catch (const std::exception& e) {
-            spdlog::error("{}", e.what());
-            return 1;
-        }
-        if (output_style != OutputStyle::Legacy) {
-            if (run_polygon_format != "FeatureCollection") {
-                spdlog::warn("--polygon-format is ignored for output style '{}'", run_output_style);
+    try {
+        if (run->parsed()) {
+            OutputStyle output_style;
+            try {
+                output_style = parse_output_style(run_output_style);
+            } catch (const std::exception& e) {
+                spdlog::error("{}", e.what());
+                return 1;
             }
-            if (run_count_format != "loom") {
-                spdlog::warn("--count-matrix-format is ignored for output style '{}'", run_output_style);
+            std::string resolved_run_input = run_coordinates;
+            try {
+                resolved_run_input = resolve_xenium_input(run_coordinates);
+            } catch (const std::exception& e) {
+                spdlog::error("{}", e.what());
+                return 1;
             }
+            if (output_style != OutputStyle::Legacy) {
+                if (run_polygon_format != "FeatureCollection") {
+                    spdlog::warn("--polygon-format is ignored for output style '{}'", run_output_style);
+                }
+                if (run_count_format != "loom") {
+                    spdlog::warn("--count-matrix-format is ignored for output style '{}'", run_output_style);
+                }
+            }
+            if (!run_prior_seg.empty()) {
+                opts.prior = parse_prior_input_spec(run_prior_seg);
+            }
+            if (opts.segmentation.scale > 0) {
+                opts.prior.estimate_scale_from_prior = false;
+            }
+            if (opts.prior.type == PriorInputType::None && opts.segmentation.scale <= 0) {
+                spdlog::error("Either prior_segmentation or --scale must be provided.");
+                return 1;
+            }
+            return cmd_run(resolved_run_input, opts, run_output, output_style,
+                           run_plot, run_skip_ncv_color, run_polygon_format, run_count_format, cli_cmd);
         }
-        if (!run_prior_seg.empty()) {
-            opts.prior = parse_prior_input_spec(run_prior_seg);
-        }
-        if (opts.segmentation.scale > 0) {
-            opts.prior.estimate_scale_from_prior = false;
-        }
-        if (opts.prior.type == PriorInputType::None && opts.segmentation.scale <= 0) {
-            spdlog::error("Either prior_segmentation or --scale must be provided.");
-            return 1;
-        }
-        return cmd_run(resolved_run_input, opts, run_output, output_style,
-                       run_plot, run_skip_ncv_color, run_polygon_format, run_count_format, cli_cmd);
-    }
 
-    if (preview->parsed()) {
-        try {
+        if (preview->parsed()) {
             return cmd_preview(resolve_xenium_input(prev_coordinates), opts, prev_output);
-        } catch (const std::exception& e) {
-            spdlog::error("{}", e.what());
-            return 1;
         }
-    }
 
-    if (segfree->parsed()) {
-        try {
+        if (segfree->parsed()) {
             return cmd_segfree(resolve_xenium_input(sf_coordinates), opts, sf_k_neighbors, sf_output);
-        } catch (const std::exception& e) {
-            spdlog::error("{}", e.what());
-            return 1;
         }
+    } catch (const std::exception& e) {
+        spdlog::error("{}", e.what());
+        return 1;
+    } catch (...) {
+        spdlog::error("Unknown error");
+        return 1;
     }
 
     return 0;
