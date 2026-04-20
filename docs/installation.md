@@ -65,7 +65,7 @@ sudo apt-get install -y --no-install-recommends \
 ### 3. Configure And Build The Binary
 
 ```bash
-cmake -S . -B build -DBAYSOR_WITH_TESTS=OFF
+cmake -S . -B build 
 cmake --build build --target baysor -j"$(nproc)"
 ```
 
