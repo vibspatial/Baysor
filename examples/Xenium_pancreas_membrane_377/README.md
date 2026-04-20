@@ -158,7 +158,12 @@ The current recommended path to Xenium Explorer is:
 1. run Baysor in `legacy` mode on the full Xenium bundle
 2. pass Baysor outputs into `xeniumranger import-segmentation`
 
-Example:
+Use these two Baysor outputs for the handoff:
+
+- `./tests/full_cellid/segmentation.csv`
+- `./tests/full_cellid/segmentation_polygons_2d.json`
+
+Example conversion command:
 
 ```bash
 xeniumranger import-segmentation \
@@ -168,6 +173,11 @@ xeniumranger import-segmentation \
   --viz-polygons ./tests/full_cellid/segmentation_polygons_2d.json \
   --units microns
 ```
+
+Additional Xenium Ranger flags can be added as needed, for example:
+
+- `--localcores 16`
+- `--localmem 64`
 
 Notes:
 

@@ -71,7 +71,13 @@ The recommended Explorer path is:
 1. run Baysor on the original Xenium bundle in `legacy` mode
 2. run `xeniumranger import-segmentation`
 
-Example:
+The two Baysor files used for the handoff are:
+
+- `segmentation.csv`
+- `segmentation_polygons_2d.json`
+
+Run the conversion from the directory that contains the original Xenium bundle,
+or provide an absolute bundle path:
 
 ```bash
 xeniumranger import-segmentation \
@@ -81,6 +87,11 @@ xeniumranger import-segmentation \
   --viz-polygons out_dir/segmentation_polygons_2d.json \
   --units microns
 ```
+
+You can also add normal Xenium Ranger execution flags such as:
+
+- `--localcores <n>`
+- `--localmem <gb>`
 
 This is the preferred route instead of direct Baysor-side Xenium bundle
 generation.
