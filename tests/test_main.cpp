@@ -36,6 +36,7 @@
 #include <unordered_set>
 #include <vector>
 #include <cstdio>
+#include <cstdlib>
 #include <random>
 #include <parquet/arrow/writer.h>
 #include <hdf5.h>
@@ -1842,14 +1843,30 @@ TEST(Xenium, ManifestHelpers) {
     EXPECT_TRUE(baysor::is_xenium_manifest_path("experiment.xenium"));
     EXPECT_FALSE(baysor::is_xenium_manifest_path("transcripts.parquet"));
 
-    const std::filesystem::path dataset_dir =
-        std::filesystem::path(BAYSOR_TEST_SOURCE_DIR) /
-        "examples/Xenium_pancreas_membrane_377/data";
+    char tmpl[] = "/tmp/baysor_xenium_manifest_XXXXXX";
+    char* created = mkdtemp(tmpl);
+    ASSERT_NE(created, nullptr);
+
+    const std::filesystem::path dataset_dir(created);
     const std::string manifest_path = (dataset_dir / "experiment.xenium").string();
+    {
+        std::ofstream manifest(manifest_path);
+        ASSERT_TRUE(static_cast<bool>(manifest));
+        manifest << "{}\n";
+    }
+    {
+        std::ofstream transcripts((dataset_dir / "transcripts.parquet").string(), std::ios::binary);
+        ASSERT_TRUE(static_cast<bool>(transcripts));
+    }
+
     auto ctx = baysor::load_xenium_manifest_context(manifest_path);
     EXPECT_EQ(ctx.manifest_path, manifest_path);
     EXPECT_EQ(ctx.dataset_dir, dataset_dir.string());
     EXPECT_EQ(ctx.transcripts_path, (dataset_dir / "transcripts.parquet").string());
+
+    std::error_code ec;
+    std::filesystem::remove_all(dataset_dir, ec);
+    EXPECT_FALSE(ec) << ec.message();
 }
 
 // ============================================================================
