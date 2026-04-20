@@ -8,6 +8,7 @@
 #include <arrow/io/api.h>
 #include <arrow/result.h>
 #include <arrow/status.h>
+#include <arrow/util/bit_util.h>
 #include <parquet/arrow/reader.h>
 
 #include <algorithm>
@@ -270,65 +271,279 @@ std::shared_ptr<arrow::Schema> get_parquet_schema(
     return schema;
 }
 
-std::uint64_t array_length_or_zero(const std::shared_ptr<arrow::Array>& arr) {
-    return arr ? static_cast<std::uint64_t>(arr->length()) : 0;
-}
+struct NumericArrayView {
+    enum class Kind {
+        Invalid,
+        Double,
+        Float,
+        Int64,
+        Int32,
+        Int16,
+        Int8,
+        UInt64,
+        UInt32,
+        UInt16,
+        UInt8,
+        Fallback
+    };
 
-double read_numeric_value(const std::shared_ptr<arrow::Array>& arr, int64_t i) {
-    if (!arr || arr->IsNull(i)) return std::numeric_limits<double>::quiet_NaN();
+    const uint8_t* null_bitmap = nullptr;
+    int64_t offset = 0;
+    Kind kind = Kind::Invalid;
+    const arrow::DoubleArray* double_arr = nullptr;
+    const arrow::FloatArray* float_arr = nullptr;
+    const arrow::Int64Array* int64_arr = nullptr;
+    const arrow::Int32Array* int32_arr = nullptr;
+    const arrow::Int16Array* int16_arr = nullptr;
+    const arrow::Int8Array* int8_arr = nullptr;
+    const arrow::UInt64Array* uint64_arr = nullptr;
+    const arrow::UInt32Array* uint32_arr = nullptr;
+    const arrow::UInt16Array* uint16_arr = nullptr;
+    const arrow::UInt8Array* uint8_arr = nullptr;
+    std::shared_ptr<arrow::Array> fallback;
 
-    switch (arr->type_id()) {
-        case arrow::Type::DOUBLE:
-            return std::static_pointer_cast<arrow::DoubleArray>(arr)->Value(i);
-        case arrow::Type::FLOAT:
-            return static_cast<double>(std::static_pointer_cast<arrow::FloatArray>(arr)->Value(i));
-        case arrow::Type::INT64:
-            return static_cast<double>(std::static_pointer_cast<arrow::Int64Array>(arr)->Value(i));
-        case arrow::Type::INT32:
-            return static_cast<double>(std::static_pointer_cast<arrow::Int32Array>(arr)->Value(i));
-        case arrow::Type::INT16:
-            return static_cast<double>(std::static_pointer_cast<arrow::Int16Array>(arr)->Value(i));
-        case arrow::Type::INT8:
-            return static_cast<double>(std::static_pointer_cast<arrow::Int8Array>(arr)->Value(i));
-        case arrow::Type::UINT64:
-            return static_cast<double>(std::static_pointer_cast<arrow::UInt64Array>(arr)->Value(i));
-        case arrow::Type::UINT32:
-            return static_cast<double>(std::static_pointer_cast<arrow::UInt32Array>(arr)->Value(i));
-        case arrow::Type::UINT16:
-            return static_cast<double>(std::static_pointer_cast<arrow::UInt16Array>(arr)->Value(i));
-        case arrow::Type::UINT8:
-            return static_cast<double>(std::static_pointer_cast<arrow::UInt8Array>(arr)->Value(i));
-        default: {
-            auto scalar = arrow_unwrap(arr->GetScalar(i));
-            return std::stod(scalar->ToString());
+    NumericArrayView() = default;
+    explicit NumericArrayView(const std::shared_ptr<arrow::Array>& arr) { reset(arr); }
+
+    void reset(const std::shared_ptr<arrow::Array>& arr) {
+        null_bitmap = nullptr;
+        offset = 0;
+        kind = Kind::Invalid;
+        double_arr = nullptr;
+        float_arr = nullptr;
+        int64_arr = nullptr;
+        int32_arr = nullptr;
+        int16_arr = nullptr;
+        int8_arr = nullptr;
+        uint64_arr = nullptr;
+        uint32_arr = nullptr;
+        uint16_arr = nullptr;
+        uint8_arr = nullptr;
+        fallback.reset();
+
+        if (!arr) return;
+
+        null_bitmap = arr->null_bitmap_data();
+        offset = arr->offset();
+        switch (arr->type_id()) {
+            case arrow::Type::DOUBLE:
+                double_arr = static_cast<const arrow::DoubleArray*>(arr.get());
+                kind = Kind::Double;
+                break;
+            case arrow::Type::FLOAT:
+                float_arr = static_cast<const arrow::FloatArray*>(arr.get());
+                kind = Kind::Float;
+                break;
+            case arrow::Type::INT64:
+                int64_arr = static_cast<const arrow::Int64Array*>(arr.get());
+                kind = Kind::Int64;
+                break;
+            case arrow::Type::INT32:
+                int32_arr = static_cast<const arrow::Int32Array*>(arr.get());
+                kind = Kind::Int32;
+                break;
+            case arrow::Type::INT16:
+                int16_arr = static_cast<const arrow::Int16Array*>(arr.get());
+                kind = Kind::Int16;
+                break;
+            case arrow::Type::INT8:
+                int8_arr = static_cast<const arrow::Int8Array*>(arr.get());
+                kind = Kind::Int8;
+                break;
+            case arrow::Type::UINT64:
+                uint64_arr = static_cast<const arrow::UInt64Array*>(arr.get());
+                kind = Kind::UInt64;
+                break;
+            case arrow::Type::UINT32:
+                uint32_arr = static_cast<const arrow::UInt32Array*>(arr.get());
+                kind = Kind::UInt32;
+                break;
+            case arrow::Type::UINT16:
+                uint16_arr = static_cast<const arrow::UInt16Array*>(arr.get());
+                kind = Kind::UInt16;
+                break;
+            case arrow::Type::UINT8:
+                uint8_arr = static_cast<const arrow::UInt8Array*>(arr.get());
+                kind = Kind::UInt8;
+                break;
+            default:
+                fallback = arr;
+                kind = Kind::Fallback;
+                break;
         }
     }
-}
 
-std::string read_string_value(const std::shared_ptr<arrow::Array>& arr, int64_t i) {
-    if (!arr || arr->IsNull(i)) return "";
+    bool is_valid(int64_t i) const {
+        if (kind == Kind::Invalid) return false;
+        return !null_bitmap || arrow::bit_util::GetBit(null_bitmap, offset + i);
+    }
 
-    if (arr->type_id() == arrow::Type::STRING) {
-        return std::static_pointer_cast<arrow::StringArray>(arr)->GetString(i);
-    }
-    if (arr->type_id() == arrow::Type::LARGE_STRING) {
-        return std::static_pointer_cast<arrow::LargeStringArray>(arr)->GetString(i);
-    }
-    if (arr->type_id() == arrow::Type::DICTIONARY) {
-        auto dict_arr = std::static_pointer_cast<arrow::DictionaryArray>(arr);
-        auto dict = dict_arr->dictionary();
-        int64_t dict_idx = static_cast<int64_t>(read_numeric_value(dict_arr->indices(), i));
-        if (dict->type_id() == arrow::Type::STRING) {
-            return std::static_pointer_cast<arrow::StringArray>(dict)->GetString(dict_idx);
+    double value(int64_t i) const {
+        if (!is_valid(i)) return std::numeric_limits<double>::quiet_NaN();
+        switch (kind) {
+            case Kind::Double: return double_arr->Value(i);
+            case Kind::Float: return static_cast<double>(float_arr->Value(i));
+            case Kind::Int64: return static_cast<double>(int64_arr->Value(i));
+            case Kind::Int32: return static_cast<double>(int32_arr->Value(i));
+            case Kind::Int16: return static_cast<double>(int16_arr->Value(i));
+            case Kind::Int8: return static_cast<double>(int8_arr->Value(i));
+            case Kind::UInt64: return static_cast<double>(uint64_arr->Value(i));
+            case Kind::UInt32: return static_cast<double>(uint32_arr->Value(i));
+            case Kind::UInt16: return static_cast<double>(uint16_arr->Value(i));
+            case Kind::UInt8: return static_cast<double>(uint8_arr->Value(i));
+            case Kind::Fallback: {
+                auto scalar = arrow_unwrap(fallback->GetScalar(i));
+                return std::stod(scalar->ToString());
+            }
+            case Kind::Invalid: break;
         }
-        if (dict->type_id() == arrow::Type::LARGE_STRING) {
-            return std::static_pointer_cast<arrow::LargeStringArray>(dict)->GetString(dict_idx);
+        return std::numeric_limits<double>::quiet_NaN();
+    }
+
+    int64_t int64_value(int64_t i) const {
+        if (!is_valid(i)) return -1;
+        switch (kind) {
+            case Kind::Int64: return int64_arr->Value(i);
+            case Kind::Int32: return static_cast<int64_t>(int32_arr->Value(i));
+            case Kind::Int16: return static_cast<int64_t>(int16_arr->Value(i));
+            case Kind::Int8: return static_cast<int64_t>(int8_arr->Value(i));
+            case Kind::UInt64: return static_cast<int64_t>(uint64_arr->Value(i));
+            case Kind::UInt32: return static_cast<int64_t>(uint32_arr->Value(i));
+            case Kind::UInt16: return static_cast<int64_t>(uint16_arr->Value(i));
+            case Kind::UInt8: return static_cast<int64_t>(uint8_arr->Value(i));
+            case Kind::Double: return static_cast<int64_t>(std::llround(double_arr->Value(i)));
+            case Kind::Float: return static_cast<int64_t>(std::llround(float_arr->Value(i)));
+            case Kind::Fallback: {
+                auto scalar = arrow_unwrap(fallback->GetScalar(i));
+                return static_cast<int64_t>(std::stoll(scalar->ToString()));
+            }
+            case Kind::Invalid: break;
+        }
+        return -1;
+    }
+};
+
+struct StringArrayView {
+    enum class Kind {
+        Invalid,
+        String,
+        LargeString,
+        DictionaryString,
+        DictionaryLargeString,
+        Fallback
+    };
+
+    const uint8_t* null_bitmap = nullptr;
+    int64_t offset = 0;
+    Kind kind = Kind::Invalid;
+    const arrow::StringArray* string_arr = nullptr;
+    const arrow::LargeStringArray* large_string_arr = nullptr;
+    NumericArrayView dict_indices;
+    const arrow::StringArray* dict_string_arr = nullptr;
+    const arrow::LargeStringArray* dict_large_string_arr = nullptr;
+    std::shared_ptr<arrow::Array> fallback;
+
+    StringArrayView() = default;
+    explicit StringArrayView(const std::shared_ptr<arrow::Array>& arr) { reset(arr); }
+
+    void reset(const std::shared_ptr<arrow::Array>& arr) {
+        null_bitmap = nullptr;
+        offset = 0;
+        kind = Kind::Invalid;
+        string_arr = nullptr;
+        large_string_arr = nullptr;
+        dict_indices = NumericArrayView();
+        dict_string_arr = nullptr;
+        dict_large_string_arr = nullptr;
+        fallback.reset();
+
+        if (!arr) return;
+
+        null_bitmap = arr->null_bitmap_data();
+        offset = arr->offset();
+        switch (arr->type_id()) {
+            case arrow::Type::STRING:
+                string_arr = static_cast<const arrow::StringArray*>(arr.get());
+                kind = Kind::String;
+                break;
+            case arrow::Type::LARGE_STRING:
+                large_string_arr = static_cast<const arrow::LargeStringArray*>(arr.get());
+                kind = Kind::LargeString;
+                break;
+            case arrow::Type::DICTIONARY: {
+                auto dict_arr = static_cast<const arrow::DictionaryArray*>(arr.get());
+                dict_indices.reset(dict_arr->indices());
+                auto dict = dict_arr->dictionary();
+                if (dict->type_id() == arrow::Type::STRING) {
+                    dict_string_arr = static_cast<const arrow::StringArray*>(dict.get());
+                    kind = Kind::DictionaryString;
+                } else if (dict->type_id() == arrow::Type::LARGE_STRING) {
+                    dict_large_string_arr = static_cast<const arrow::LargeStringArray*>(dict.get());
+                    kind = Kind::DictionaryLargeString;
+                } else {
+                    fallback = arr;
+                    kind = Kind::Fallback;
+                }
+                break;
+            }
+            default:
+                fallback = arr;
+                kind = Kind::Fallback;
+                break;
         }
     }
 
-    auto scalar = arrow_unwrap(arr->GetScalar(i));
-    return scalar->ToString();
-}
+    bool is_valid(int64_t i) const {
+        if (kind == Kind::Invalid) return false;
+        return !null_bitmap || arrow::bit_util::GetBit(null_bitmap, offset + i);
+    }
+
+    bool is_dictionary() const {
+        return kind == Kind::DictionaryString || kind == Kind::DictionaryLargeString;
+    }
+
+    int64_t dictionary_length() const {
+        if (kind == Kind::DictionaryString && dict_string_arr) return dict_string_arr->length();
+        if (kind == Kind::DictionaryLargeString && dict_large_string_arr) return dict_large_string_arr->length();
+        return 0;
+    }
+
+    int64_t dictionary_index(int64_t i) const {
+        if (!is_dictionary() || !is_valid(i)) return -1;
+        return dict_indices.int64_value(i);
+    }
+
+    std::string dictionary_value(int64_t dict_idx) const {
+        if (dict_idx < 0) return "";
+        if (kind == Kind::DictionaryString && dict_string_arr) {
+            return std::string(dict_string_arr->GetView(dict_idx));
+        }
+        if (kind == Kind::DictionaryLargeString && dict_large_string_arr) {
+            return std::string(dict_large_string_arr->GetView(dict_idx));
+        }
+        return "";
+    }
+
+    std::string value(int64_t i) const {
+        if (!is_valid(i)) return "";
+        switch (kind) {
+            case Kind::String:
+                return std::string(string_arr->GetView(i));
+            case Kind::LargeString:
+                return std::string(large_string_arr->GetView(i));
+            case Kind::DictionaryString:
+            case Kind::DictionaryLargeString:
+                return dictionary_value(dictionary_index(i));
+            case Kind::Fallback: {
+                auto scalar = arrow_unwrap(fallback->GetScalar(i));
+                return scalar->ToString();
+            }
+            case Kind::Invalid:
+                break;
+        }
+        return "";
+    }
+};
 
 std::vector<std::regex> compile_gene_patterns(const std::vector<std::string>& patterns) {
     std::vector<std::regex> regexes;
@@ -470,18 +685,47 @@ Pass1Summary scan_parquet_pass1(
         std::shared_ptr<arrow::Array> qv_arr;
         if (plan.qv >= 0) qv_arr = batch->column(col++);
 
-        for (int64_t i = 0; i < batch->num_rows(); ++i) {
-            double x = read_numeric_value(x_arr, i);
-            double y = read_numeric_value(y_arr, i);
-            double z = (plan.z >= 0) ? read_numeric_value(z_arr, i) : 0.0;
-            double qv = (plan.qv >= 0) ? read_numeric_value(qv_arr, i) : 0.0;
-            if (!row_passes_static_filters(x, y, plan.z >= 0, z, plan.qv >= 0, qv, opts)) {
-                continue;
+        const bool has_z = plan.z >= 0;
+        const bool has_qv = plan.qv >= 0;
+        NumericArrayView x_view(x_arr);
+        NumericArrayView y_view(y_arr);
+        NumericArrayView z_view(z_arr);
+        NumericArrayView qv_view(qv_arr);
+        StringArrayView gene_view(gene_arr);
+
+        if (gene_view.is_dictionary()) {
+            std::vector<int64_t> batch_gene_counts(
+                static_cast<size_t>(gene_view.dictionary_length()), 0);
+            for (int64_t i = 0; i < batch->num_rows(); ++i) {
+                double x = x_view.value(i);
+                double y = y_view.value(i);
+                double z = has_z ? z_view.value(i) : 0.0;
+                double qv = has_qv ? qv_view.value(i) : 0.0;
+                if (!row_passes_static_filters(x, y, has_z, z, has_qv, qv, opts)) continue;
+
+                int64_t dict_idx = gene_view.dictionary_index(i);
+                if (dict_idx >= 0 && dict_idx < static_cast<int64_t>(batch_gene_counts.size())) {
+                    batch_gene_counts[static_cast<size_t>(dict_idx)]++;
+                }
             }
 
-            auto gene = read_string_value(gene_arr, i);
-            if (gene.empty()) continue;
-            gene_counts[gene]++;
+            for (size_t dict_idx = 0; dict_idx < batch_gene_counts.size(); ++dict_idx) {
+                int64_t count = batch_gene_counts[dict_idx];
+                if (count == 0) continue;
+                gene_counts[gene_view.dictionary_value(static_cast<int64_t>(dict_idx))] += count;
+            }
+        } else {
+            for (int64_t i = 0; i < batch->num_rows(); ++i) {
+                double x = x_view.value(i);
+                double y = y_view.value(i);
+                double z = has_z ? z_view.value(i) : 0.0;
+                double qv = has_qv ? qv_view.value(i) : 0.0;
+                if (!row_passes_static_filters(x, y, has_z, z, has_qv, qv, opts)) continue;
+
+                auto gene = gene_view.value(i);
+                if (gene.empty()) continue;
+                gene_counts[gene]++;
+            }
         }
     }
 
@@ -836,39 +1080,66 @@ MoleculeData load_molecules(
             std::shared_ptr<arrow::Array> nuclei_probs_arr;
             if (plan.nuclei_probs >= 0) nuclei_probs_arr = batch->column(col++);
 
-            for (int64_t i = 0; i < batch->num_rows(); ++i) {
-                double x = read_numeric_value(x_arr, i);
-                double y = read_numeric_value(y_arr, i);
-                double z = (plan.z >= 0) ? read_numeric_value(z_arr, i) : 0.0;
-                double qv = (plan.qv >= 0) ? read_numeric_value(qv_arr, i) : 0.0;
-                if (!row_passes_static_filters(x, y, plan.z >= 0, z, plan.qv >= 0, qv, opts)) {
-                    continue;
-                }
+            const bool has_z = plan.z >= 0;
+            const bool has_qv = plan.qv >= 0;
+            NumericArrayView x_view(x_arr);
+            NumericArrayView y_view(y_arr);
+            NumericArrayView z_view(z_arr);
+            NumericArrayView qv_view(qv_arr);
+            NumericArrayView transcript_id_view(transcript_id_arr);
+            NumericArrayView confidence_view(confidence_arr);
+            NumericArrayView cluster_view(cluster_arr);
+            NumericArrayView nuclei_probs_view(nuclei_probs_arr);
+            StringArrayView gene_view(gene_arr);
+            StringArrayView prior_view(prior_arr);
 
-                auto gene = read_string_value(gene_arr, i);
-                auto it = pass1.gene_id_map.find(gene);
-                if (it == pass1.gene_id_map.end()) {
-                    continue;
+            std::vector<int> dict_to_gene_id;
+            if (gene_view.is_dictionary()) {
+                dict_to_gene_id.assign(static_cast<size_t>(gene_view.dictionary_length()), 0);
+                for (size_t dict_idx = 0; dict_idx < dict_to_gene_id.size(); ++dict_idx) {
+                    auto it = pass1.gene_id_map.find(
+                        gene_view.dictionary_value(static_cast<int64_t>(dict_idx)));
+                    if (it != pass1.gene_id_map.end()) dict_to_gene_id[dict_idx] = it->second;
                 }
+            }
+
+            for (int64_t i = 0; i < batch->num_rows(); ++i) {
+                double x = x_view.value(i);
+                double y = y_view.value(i);
+                double z = has_z ? z_view.value(i) : 0.0;
+                double qv = has_qv ? qv_view.value(i) : 0.0;
+                if (!row_passes_static_filters(x, y, has_z, z, has_qv, qv, opts)) continue;
+
+                int gene_id = 0;
+                if (gene_view.is_dictionary()) {
+                    int64_t dict_idx = gene_view.dictionary_index(i);
+                    if (dict_idx >= 0 && dict_idx < static_cast<int64_t>(dict_to_gene_id.size())) {
+                        gene_id = dict_to_gene_id[static_cast<size_t>(dict_idx)];
+                    }
+                } else {
+                    auto it = pass1.gene_id_map.find(gene_view.value(i));
+                    if (it != pass1.gene_id_map.end()) gene_id = it->second;
+                }
+                if (gene_id == 0) continue;
 
                 data.x[out_idx] = x;
                 data.y[out_idx] = y;
-                if (plan.z >= 0) data.z[out_idx] = z;
-                data.gene[out_idx] = it->second;
+                if (has_z) data.z[out_idx] = z;
+                data.gene[out_idx] = gene_id;
                 if (plan.transcript_id >= 0) {
-                    data.source_transcript_id[out_idx] = static_cast<std::uint64_t>(std::llround(
-                        read_numeric_value(transcript_id_arr, i)));
+                    data.source_transcript_id[out_idx] =
+                        static_cast<std::uint64_t>(transcript_id_view.int64_value(i));
                 }
-                if (plan.prior >= 0) prior_raw[out_idx] = read_string_value(prior_arr, i);
+                if (plan.prior >= 0) prior_raw[out_idx] = prior_view.value(i);
                 if (plan.confidence >= 0) {
-                    data.confidence[out_idx] = read_numeric_value(confidence_arr, i);
+                    data.confidence[out_idx] = confidence_view.value(i);
                 }
                 if (plan.cluster >= 0) {
-                    data.cluster[out_idx] = static_cast<int>(std::round(
-                        read_numeric_value(cluster_arr, i)));
+                    data.cluster[out_idx] =
+                        static_cast<int>(std::llround(cluster_view.value(i)));
                 }
                 if (plan.nuclei_probs >= 0) {
-                    data.nuclei_probs[out_idx] = read_numeric_value(nuclei_probs_arr, i);
+                    data.nuclei_probs[out_idx] = nuclei_probs_view.value(i);
                 }
                 ++out_idx;
             }
