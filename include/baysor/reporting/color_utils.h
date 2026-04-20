@@ -59,6 +59,30 @@ NcvReportEmbedding gene_composition_report_embedding(
     int n_pca_dims = 10
 );
 
+std::vector<std::string> gene_composition_color_embedding_streaming(
+    const Eigen::MatrixXd& pos_data,
+    const std::vector<int>& genes,
+    int n_genes,
+    const std::vector<double>& confidence,
+    int k_neighbors,
+    int basis_sample_size = 100000,
+    int sample_size = 20000,
+    int seed = 42,
+    int n_pca_dims = 10
+);
+
+NcvReportEmbedding gene_composition_report_embedding_streaming(
+    const Eigen::MatrixXd& pos_data,
+    const std::vector<int>& genes,
+    int n_genes,
+    const std::vector<double>& confidence,
+    int k_neighbors,
+    int basis_sample_size = 100000,
+    int sample_size = 20000,
+    int seed = 42,
+    int n_pca_dims = 10
+);
+
 /// Pairwise gene spatial co-occurrence matrix from the molecule adjacency graph.
 /// Returns n_genes x n_genes matrix normalized by sqrt of sum weights.
 Eigen::MatrixXd pairwise_gene_spatial_cor(

@@ -290,10 +290,8 @@ BmmData<N> initialize_bmm_data(
 
         // CategoricalSmoothed with all-ones initial counts (uniform gene prior)
         CategoricalSmoothed comp_params(n_genes, 1.0);
-        // Set initial counts to 1.0 per gene (matches Julia: ones(Float64, gene_num))
-        std::fill(comp_params.counts.begin(), comp_params.counts.end(), 1.0);
-        comp_params.sum_counts = static_cast<double>(n_genes);
-        comp_params.n_genes = n_genes;
+        // Set initial counts to 1.0 per gene (matches Julia's dense all-ones gene prior)
+        comp_params.set_uniform_counts(1.0f);
 
         Component<N> comp(pos_params, comp_params, shape_prior_obj, /*guid=*/ci + 1);
         comp.n_samples = n_samples_per_cell.empty() ? 0 : n_samples_per_cell[ci];

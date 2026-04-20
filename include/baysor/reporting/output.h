@@ -80,12 +80,19 @@ void save_matrix_to_loom(const Eigen::SparseMatrix<float>& matrix,
                          const std::string& path,
                          const LoomColAttrs& col_attrs = {});
 
+void save_matrix_to_loom(const Eigen::SparseMatrix<float, Eigen::RowMajor>& matrix,
+                         const std::vector<std::string>& gene_names,
+                         const std::vector<std::string>& cell_names,
+                         const std::string& path,
+                         const LoomColAttrs& col_attrs = {});
+
 void save_matrix_to_10x_h5(const Eigen::SparseMatrix<float>& matrix,
                            const std::vector<std::string>& gene_names,
                            const std::vector<std::string>& cell_names,
                            const std::string& path);
 
-/// Save count matrix to TSV
+/// Save count matrix to TSV as a dense gene x cell table.
+/// Input matrix is n_cells x n_genes, matching the other count-matrix writers.
 void save_matrix_to_tsv(const Eigen::SparseMatrix<double>& matrix,
                         const std::vector<std::string>& gene_names,
                         const std::vector<std::string>& cell_names,

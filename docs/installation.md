@@ -15,7 +15,7 @@ Install a C++ toolchain plus the libraries required by
 - HDF5
 - nlohmann_json
 - libtiff
-- GTest for the test target
+- GTest for the optional test target
 
 Several header-only dependencies are fetched automatically by CMake.
 
@@ -49,7 +49,6 @@ sudo apt-get update
 sudo apt-get install -y --no-install-recommends \
   build-essential \
   cmake \
-  ninja-build \
   pkg-config \
   git \
   libeigen3-dev \
@@ -60,30 +59,14 @@ sudo apt-get install -y --no-install-recommends \
   libparquet-dev \
   libhdf5-dev \
   nlohmann-json3-dev \
-  libtiff-dev \
-  libgtest-dev
+  libtiff-dev
 ```
 
-### 3. Configure, Build, And Test
+### 3. Configure And Build The Binary
 
 ```bash
-cmake -S . -B build -GNinja
-cmake --build build
-ctest --test-dir build --output-on-failure
-```
-
-If you only need the main binary:
-
-```bash
-cmake -S . -B build -GNinja -DBAYSOR_WITH_TESTS=OFF
-cmake --build build --target baysor
-```
-
-## Configure And Build
-
-```bash
-cmake -S . -B build
-cmake --build build
+cmake -S . -B build -DBAYSOR_WITH_TESTS=OFF
+cmake --build build --target baysor -j"$(nproc)"
 ```
 
 The main binary will be:
@@ -92,9 +75,29 @@ The main binary will be:
 ./build/baysor
 ```
 
-## Run Tests
+### 4. Optional: Build And Run Tests
 
 ```bash
+sudo apt-get install -y --no-install-recommends libgtest-dev
+cmake -S . -B build
+cmake --build build --target baysor baysor_tests -j"$(nproc)"
+ctest --test-dir build --output-on-failure
+```
+
+## Configure And Build
+
+If the required libraries are already installed on your system:
+
+```bash
+cmake -S . -B build -DBAYSOR_WITH_TESTS=OFF
+cmake --build build --target baysor -j"$(nproc)"
+```
+
+If you want tests too:
+
+```bash
+cmake -S . -B build
+cmake --build build --target baysor baysor_tests -j"$(nproc)"
 ctest --test-dir build --output-on-failure
 ```
 
@@ -103,13 +106,13 @@ ctest --test-dir build --output-on-failure
 Show CLI help:
 
 ```bash
-./build/baysor run --help
+./build/baysor --help
 ```
 
-Build just the main binary and tests:
+Show run-specific help:
 
 ```bash
-cmake --build build --target baysor baysor_tests -j4
+./build/baysor run --help
 ```
 
 ## Notes

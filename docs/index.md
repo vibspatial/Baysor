@@ -29,5 +29,6 @@ It is built with CMake and currently exposes three CLI subcommands:
 - [Segmentation-Free NCVs](segfree.md)
 - [Input Data](inputs.md)
 - [Outputs](outputs.md)
+- [Output Files](output_files.md)
 - [Xenium Workflow](xenium.md)
 - [Examples](examples.md)

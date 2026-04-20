@@ -179,9 +179,7 @@ static baysor::BmmData<2> make_disconnected_bmm_data() {
     for (int ci = 0; ci < 3; ++ci) {
         MvNormal<2> pos_params(centers[ci], sigma);
         CategoricalSmoothed comp_params(2, 1.0);
-        std::fill(comp_params.counts.begin(), comp_params.counts.end(), 1.0);
-        comp_params.sum_counts = 2.0;
-        comp_params.n_genes = 2;
+        comp_params.set_uniform_counts(1.0f);
         data.components.emplace_back(pos_params, comp_params, prior, ci + 1);
     }
 
@@ -218,9 +216,10 @@ static baysor::AdjList make_chain_adj_list(int n_molecules) {
         static_cast<int>(src.size()), n_molecules);
 }
 
+template <typename TActual, typename TExpected>
 static void expect_vector_near(
-    const std::vector<double>& actual,
-    const std::vector<double>& expected,
+    const std::vector<TActual>& actual,
+    const std::vector<TExpected>& expected,
     double tol
 ) {
     ASSERT_EQ(actual.size(), expected.size());
@@ -356,9 +355,7 @@ static baysor::Component<2> make_one_gene_component(
     Eigen::Matrix2d sigma = Eigen::Matrix2d::Identity() * variance;
     baysor::MvNormal<2> pos_params(center, sigma);
     baysor::CategoricalSmoothed comp_params(1, 1.0);
-    comp_params.counts[0] = 1.0;
-    comp_params.sum_counts = 1.0;
-    comp_params.n_genes = 1;
+    comp_params.set_dense_counts({1.0f});
     baysor::Component<2> comp(pos_params, comp_params, std::nullopt, guid);
     comp.prior_probability = prior_probability;
     comp.n_samples = n_samples;
@@ -379,10 +376,7 @@ static baysor::Component<2> make_two_gene_component(
     Eigen::Matrix2d sigma = Eigen::Matrix2d::Identity() * variance;
     baysor::MvNormal<2> pos_params(center, sigma);
     baysor::CategoricalSmoothed comp_params(2, 1.0);
-    comp_params.counts[0] = 1.0;
-    comp_params.counts[1] = 1.0;
-    comp_params.sum_counts = 2.0;
-    comp_params.n_genes = 2;
+    comp_params.set_dense_counts({1.0f, 1.0f});
     baysor::Component<2> comp(pos_params, comp_params, std::nullopt, guid);
     comp.prior_probability = prior_probability;
     comp.n_samples = n_samples;
@@ -738,7 +732,7 @@ TEST(Component, IndexedMaximizeMatchesContiguousPath) {
     EXPECT_EQ(indexed.n_samples, contiguous.n_samples);
     EXPECT_EQ(indexed.composition_params.n_genes, contiguous.composition_params.n_genes);
     EXPECT_NEAR(indexed.composition_params.sum_counts, contiguous.composition_params.sum_counts, 1e-12);
-    expect_vector_near(indexed.composition_params.counts, contiguous.composition_params.counts, 1e-12);
+    expect_vector_near(indexed.composition_params.dense_counts(), contiguous.composition_params.dense_counts(), 1e-6);
     EXPECT_NEAR(indexed.position_params.mu(0), contiguous.position_params.mu(0), 1e-12);
     EXPECT_NEAR(indexed.position_params.mu(1), contiguous.position_params.mu(1), 1e-12);
     EXPECT_NEAR(indexed.position_params.sigma(0, 0), contiguous.position_params.sigma(0, 0), 1e-12);

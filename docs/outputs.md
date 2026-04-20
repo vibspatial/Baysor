@@ -14,6 +14,9 @@ Select them with:
 
 `legacy` is the default.
 
+For file-by-file definitions, including exact column order, optional fields,
+and HDF5 / Parquet layout details, see [Output Files](output_files.md).
+
 ## Legacy Output
 
 The legacy bundle mirrors the familiar Baysor output set:
@@ -30,6 +33,8 @@ Optional:
 
 - `diagnostic_report.html`
 - `segmentation_plot.html`
+
+These files are defined in [Output Files](output_files.md#legacy-bundle).
 
 ### Xenium Compatibility In Legacy Output
 
@@ -62,6 +67,8 @@ Optional:
 
 - `diagnostic_report.html`
 - `segmentation_plot.html`
+
+These files are defined in [Output Files](output_files.md#parquet-bundle).
 
 Boundary outputs use GeoParquet-compatible metadata.
 

@@ -1,4 +1,5 @@
 #include "baysor/reporting/color_utils.h"
+#include "baysor/processing/data_processing/neighborhood_composition.h"
 #include "baysor/processing/data_processing/umap_wrappers.h"
 #include "baysor/processing/models/adj_list.h"
 #include "baysor/processing/utils/utils.h"
@@ -9,6 +10,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <limits>
 #include <numeric>
 #include <random>
 #include <cstdio>
@@ -340,6 +342,308 @@ NcvReportEmbedding compute_ncv_embedding(
     return result;
 }
 
+struct LabNormalizationParams {
+    double l_min = 10.0;
+    double l_max = 90.0;
+    double trim_frac = 0.0125;
+    bool log_colors = false;
+    std::array<double, 3> row_q_lo{0.0, 0.0, 0.0};
+    double max_val = 1.0;
+    double q05 = 1e-3;
+    std::array<double, 3> log_row_min{0.0, 0.0, 0.0};
+    std::array<double, 3> log_row_scale{1.0, 1.0, 1.0};
+};
+
+LabNormalizationParams fit_lab_normalization_params(
+    const Eigen::MatrixXd& embedding,
+    double l_min = 10.0, double l_max = 90.0,
+    double trim_frac = 0.0125,
+    bool log_colors = false
+) {
+    LabNormalizationParams params;
+    params.l_min = l_min;
+    params.l_max = l_max;
+    params.trim_frac = trim_frac;
+    params.log_colors = log_colors;
+
+    const int n = static_cast<int>(embedding.cols());
+    if (n == 0) return params;
+
+    Eigen::MatrixXd work = embedding;
+    for (int r = 0; r < 3; ++r) {
+        std::vector<double> row_vals(n);
+        for (int i = 0; i < n; ++i) row_vals[i] = work(r, i);
+        params.row_q_lo[r] = quantile_vec(row_vals, trim_frac);
+        for (int i = 0; i < n; ++i) {
+            work(r, i) = std::max(work(r, i) - params.row_q_lo[r], 0.0);
+        }
+    }
+
+    std::vector<double> all_vals;
+    all_vals.reserve(3 * n);
+    for (int r = 0; r < 3; ++r)
+        for (int i = 0; i < n; ++i)
+            all_vals.push_back(work(r, i));
+    params.max_val = quantile_vec(all_vals, 1.0 - trim_frac);
+    if (params.max_val <= 0.0) params.max_val = 1.0;
+
+    work /= params.max_val;
+    work = work.cwiseMin(1.0);
+
+    if (log_colors) {
+        all_vals.clear();
+        for (int r = 0; r < 3; ++r)
+            for (int i = 0; i < n; ++i)
+                all_vals.push_back(work(r, i));
+        params.q05 = std::max(quantile_vec(all_vals, 0.05), 1e-3);
+        for (int r = 0; r < 3; ++r) {
+            for (int i = 0; i < n; ++i) work(r, i) = std::log10(work(r, i) + params.q05);
+            params.log_row_min[r] = work.row(r).minCoeff();
+            work.row(r).array() -= params.log_row_min[r];
+            params.log_row_scale[r] = work.row(r).maxCoeff();
+            if (params.log_row_scale[r] <= 0.0) params.log_row_scale[r] = 1.0;
+        }
+    }
+
+    return params;
+}
+
+void apply_lab_normalization_params(Eigen::MatrixXd& embedding, const LabNormalizationParams& params) {
+    const int n = static_cast<int>(embedding.cols());
+    if (n == 0) return;
+
+    for (int r = 0; r < 3; ++r) {
+        for (int i = 0; i < n; ++i) {
+            embedding(r, i) = std::max(embedding(r, i) - params.row_q_lo[r], 0.0);
+        }
+    }
+
+    embedding /= params.max_val;
+    embedding = embedding.cwiseMin(1.0);
+
+    if (params.log_colors) {
+        for (int r = 0; r < 3; ++r) {
+            for (int i = 0; i < n; ++i) {
+                embedding(r, i) = std::log10(embedding(r, i) + params.q05);
+            }
+            embedding.row(r).array() -= params.log_row_min[r];
+            embedding.row(r) /= params.log_row_scale[r];
+        }
+    }
+
+    embedding.row(0) *= (params.l_max - params.l_min);
+    embedding.row(0).array() += params.l_min;
+    embedding.row(1).array() -= 0.5;
+    embedding.row(1) *= 200.0;
+    embedding.row(2).array() -= 0.5;
+    embedding.row(2) *= 200.0;
+}
+
+std::vector<int> select_basis_anchor_ids(
+    const Eigen::MatrixXd& pos_data,
+    const std::vector<double>& confidence,
+    int basis_sample_size
+) {
+    const int n = static_cast<int>(confidence.size());
+    basis_sample_size = std::min(basis_sample_size, n);
+    const std::array<double, 8> threshold_ladder = {0.95, 0.90, 0.85, 0.80, 0.75, 0.70, 0.60, 0.50};
+    std::vector<int> candidates;
+    double chosen_threshold = threshold_ladder.front();
+    for (double thr : threshold_ladder) {
+        candidates.clear();
+        candidates.reserve(n);
+        for (int i = 0; i < n; ++i) if (confidence[i] >= thr) candidates.push_back(i);
+        chosen_threshold = thr;
+        if (static_cast<int>(candidates.size()) >= basis_sample_size) break;
+    }
+    (void)chosen_threshold;
+    if (static_cast<int>(candidates.size()) <= basis_sample_size) return candidates;
+
+    double xmin = std::numeric_limits<double>::infinity();
+    double xmax = -std::numeric_limits<double>::infinity();
+    double ymin = std::numeric_limits<double>::infinity();
+    double ymax = -std::numeric_limits<double>::infinity();
+    for (int idx : candidates) {
+        xmin = std::min(xmin, pos_data(0, idx));
+        xmax = std::max(xmax, pos_data(0, idx));
+        ymin = std::min(ymin, pos_data(1, idx));
+        ymax = std::max(ymax, pos_data(1, idx));
+    }
+    const double width = std::max(xmax - xmin, 1.0);
+    const double height = std::max(ymax - ymin, 1.0);
+    int nx = std::max(1, static_cast<int>(std::round(std::sqrt(basis_sample_size * width / height))));
+    int ny = std::max(1, static_cast<int>(std::ceil(static_cast<double>(basis_sample_size) / nx)));
+    std::vector<std::vector<int>> bins(static_cast<size_t>(nx * ny));
+    for (int idx : candidates) {
+        int bx = std::min(nx - 1, std::max(0, static_cast<int>(((pos_data(0, idx) - xmin) / width) * nx)));
+        int by = std::min(ny - 1, std::max(0, static_cast<int>(((pos_data(1, idx) - ymin) / height) * ny)));
+        bins[static_cast<size_t>(by) * static_cast<size_t>(nx) + static_cast<size_t>(bx)].push_back(idx);
+    }
+    int occupied = 0;
+    for (const auto& bin : bins) if (!bin.empty()) occupied++;
+    int per_bin = std::max(1, static_cast<int>(std::ceil(static_cast<double>(basis_sample_size) / std::max(1, occupied))));
+    std::vector<int> selected;
+    selected.reserve(basis_sample_size + per_bin);
+    for (const auto& bin : bins) {
+        if (bin.empty()) continue;
+        if (static_cast<int>(bin.size()) <= per_bin) {
+            selected.insert(selected.end(), bin.begin(), bin.end());
+        } else {
+            for (int i = 0; i < per_bin; ++i) {
+                int idx = static_cast<int>(std::round(static_cast<double>(i) * (bin.size() - 1) / std::max(1, per_bin - 1)));
+                selected.push_back(bin[idx]);
+            }
+        }
+    }
+    if (static_cast<int>(selected.size()) <= basis_sample_size) return selected;
+    std::vector<int> downsampled;
+    downsampled.reserve(basis_sample_size);
+    for (int i = 0; i < basis_sample_size; ++i) {
+        int idx = static_cast<int>(std::round(static_cast<double>(i) * (selected.size() - 1) / std::max(1, basis_sample_size - 1)));
+        downsampled.push_back(selected[idx]);
+    }
+    return downsampled;
+}
+
+struct NcvInterpolationModel {
+    Eigen::VectorXf sample_mean;
+    Eigen::MatrixXf pca_basis;
+    Eigen::MatrixXd anchor_pca;
+    Eigen::MatrixXd anchor_emb;
+};
+
+NcvInterpolationModel fit_ncv_interpolation_model(
+    const Eigen::MatrixXf& anchor_vecs,
+    const Eigen::MatrixXd& anchor_emb,
+    int n_pca_dims
+) {
+    const int n_components = static_cast<int>(anchor_vecs.rows());
+    const int n_anchors = static_cast<int>(anchor_vecs.cols());
+    const int n_pca = std::min(n_pca_dims, n_components);
+    NcvInterpolationModel model;
+    model.sample_mean = anchor_vecs.rowwise().mean();
+    Eigen::MatrixXf centered = anchor_vecs.colwise() - model.sample_mean;
+    Eigen::BDCSVD<Eigen::MatrixXf> svd(centered, Eigen::ComputeThinU);
+    model.pca_basis = svd.matrixU().leftCols(n_pca);
+    model.anchor_pca = (model.pca_basis.transpose() * centered).cast<double>();
+    model.anchor_emb = anchor_emb;
+    (void)n_anchors;
+    return model;
+}
+
+Eigen::MatrixXd interpolate_ncv_embedding(
+    const NcvInterpolationModel& model,
+    const Eigen::MatrixXf& query_vecs
+) {
+    const int n_query = static_cast<int>(query_vecs.cols());
+    if (n_query == 0) return Eigen::MatrixXd(3, 0);
+    Eigen::MatrixXd query_pca =
+        (model.pca_basis.transpose() * (query_vecs.colwise() - model.sample_mean)).cast<double>();
+    int k_interp = std::min(5, static_cast<int>(model.anchor_pca.cols()) - 1);
+    if (k_interp < 1) k_interp = 1;
+    auto knn = knn_parallel(model.anchor_pca, query_pca, k_interp);
+    Eigen::MatrixXd emb(3, n_query);
+    constexpr double dist_offset = 1e-10;
+    #pragma omp parallel for schedule(static)
+    for (int i = 0; i < n_query; ++i) {
+        double w_sum = 0.0;
+        Eigen::Vector3d weighted = Eigen::Vector3d::Zero();
+        for (int j = 0; j < static_cast<int>(knn.indices[i].size()); ++j) {
+            double w = 1.0 / (knn.distances[i][j] + dist_offset);
+            weighted += w * model.anchor_emb.col(knn.indices[i][j]);
+            w_sum += w;
+        }
+        emb.col(i) = weighted / w_sum;
+    }
+    return emb;
+}
+
+NcvReportEmbedding compute_ncv_embedding_streaming(
+    const Eigen::MatrixXd& pos_data,
+    const std::vector<int>& genes,
+    int n_genes,
+    const std::vector<double>& confidence,
+    int k_neighbors,
+    int basis_sample_size,
+    int sample_size,
+    int seed,
+    int n_pca_dims,
+    bool include_report_umap
+) {
+    const int n_mols = static_cast<int>(genes.size());
+    NcvReportEmbedding result;
+    result.colors.assign(n_mols, NCV_FALLBACK_COLOR);
+    if (n_mols == 0 || n_genes <= 0) return result;
+
+    std::vector<int> basis_ids = select_basis_anchor_ids(pos_data, confidence, basis_sample_size);
+    if (static_cast<int>(basis_ids.size()) <= 1) return result;
+    spdlog::info("NCV basis anchors: selected {} molecules for basis learning.", basis_ids.size());
+
+    double dist_floor = neighborhood_distance_floor(pos_data);
+    auto anchor_cm = neighborhood_count_matrix_subset(
+        pos_data, genes, basis_ids, k_neighbors, n_genes, nullptr, true, true, dist_floor
+    );
+    for (int k = 0; k < anchor_cm.outerSize(); ++k)
+        for (Eigen::SparseMatrix<float>::InnerIterator it(anchor_cm, k); it; ++it)
+            it.valueRef() = static_cast<float>(std::log(it.value() * 10000.0f + 1e-5f));
+
+    auto gene_emb_t = estimate_gene_vectors(anchor_cm, genes, 20, "ri", false);
+    auto basis_vecs = project_gene_vectors(gene_emb_t, anchor_cm);
+
+    std::vector<double> basis_conf(basis_ids.size());
+    for (size_t i = 0; i < basis_ids.size(); ++i) basis_conf[i] = confidence[basis_ids[i]];
+    NcvSampleSelection selection = select_ncv_sample_ids(basis_vecs, basis_conf, sample_size);
+    result.chosen_threshold = selection.chosen_threshold;
+    result.anchor_count = selection.anchor_count;
+    if (static_cast<int>(selection.sample_ids.size()) <= 1) {
+        spdlog::warn("NCV color embedding fallback: insufficient sampled anchors after basis selection.");
+        return result;
+    }
+
+    const int n_sample = static_cast<int>(selection.sample_ids.size());
+    spdlog::info(
+        "NCV color embedding: selected {} anchors with confidence >= {:.2f}; sampling {} for UMAP fit.",
+        selection.anchor_count, selection.chosen_threshold, n_sample
+    );
+
+    Eigen::MatrixXf sample_vecs(basis_vecs.rows(), n_sample);
+    for (int i = 0; i < n_sample; ++i) sample_vecs.col(i) = basis_vecs.col(selection.sample_ids[i]);
+    Eigen::MatrixXd sample_vecs_d = sample_vecs.cast<double>();
+    Eigen::MatrixXd sample_emb = umap_embed(sample_vecs_d, 3, 15, 200, seed, 2.0);
+
+    if (include_report_umap) {
+        Eigen::MatrixXd sample_umap2d = umap_embed(sample_vecs_d, 2, 15, 200, seed, 2.0);
+        result.sample_ids.resize(n_sample);
+        result.sample_umap_x.resize(n_sample);
+        result.sample_umap_y.resize(n_sample);
+        for (int i = 0; i < n_sample; ++i) {
+            result.sample_ids[i] = basis_ids[selection.sample_ids[i]];
+            result.sample_umap_x[i] = sample_umap2d(0, i);
+            result.sample_umap_y[i] = sample_umap2d(1, i);
+        }
+    }
+
+    NcvInterpolationModel sample_model = fit_ncv_interpolation_model(sample_vecs, sample_emb, n_pca_dims);
+    Eigen::MatrixXd basis_emb = interpolate_ncv_embedding(sample_model, basis_vecs);
+    LabNormalizationParams lab_params = fit_lab_normalization_params(basis_emb);
+    NcvInterpolationModel basis_model = fit_ncv_interpolation_model(basis_vecs, basis_emb, n_pca_dims);
+
+    stream_projected_neighborhood_vectors(
+        pos_data, genes, k_neighbors, gene_emb_t, n_genes, nullptr, nullptr,
+        true, true, dist_floor, 32768,
+        [&](int, const std::vector<int>& block_query_ids, const Eigen::MatrixXf& block_vecs) {
+            Eigen::MatrixXd block_emb = interpolate_ncv_embedding(basis_model, block_vecs);
+            apply_lab_normalization_params(block_emb, lab_params);
+            auto block_colors = embedding_to_hex(block_emb);
+            for (size_t i = 0; i < block_query_ids.size(); ++i) {
+                result.colors[block_query_ids[i]] = block_colors[i];
+            }
+        }
+    );
+
+    return result;
+}
+
 } // namespace
 
 std::vector<std::string> gene_composition_color_embedding(
@@ -362,6 +666,40 @@ NcvReportEmbedding gene_composition_report_embedding(
     return compute_ncv_embedding(mol_vecs, confidence, sample_size, seed, n_pca_dims, true);
 }
 
+std::vector<std::string> gene_composition_color_embedding_streaming(
+    const Eigen::MatrixXd& pos_data,
+    const std::vector<int>& genes,
+    int n_genes,
+    const std::vector<double>& confidence,
+    int k_neighbors,
+    int basis_sample_size,
+    int sample_size,
+    int seed,
+    int n_pca_dims
+) {
+    return compute_ncv_embedding_streaming(
+        pos_data, genes, n_genes, confidence, k_neighbors,
+        basis_sample_size, sample_size, seed, n_pca_dims, false
+    ).colors;
+}
+
+NcvReportEmbedding gene_composition_report_embedding_streaming(
+    const Eigen::MatrixXd& pos_data,
+    const std::vector<int>& genes,
+    int n_genes,
+    const std::vector<double>& confidence,
+    int k_neighbors,
+    int basis_sample_size,
+    int sample_size,
+    int seed,
+    int n_pca_dims
+) {
+    return compute_ncv_embedding_streaming(
+        pos_data, genes, n_genes, confidence, k_neighbors,
+        basis_sample_size, sample_size, seed, n_pca_dims, true
+    );
+}
+
 // ============================================================================
 // pairwise_gene_spatial_cor
 // ============================================================================
@@ -376,39 +714,51 @@ Eigen::MatrixXd pairwise_gene_spatial_cor(
     int n_genes = *std::max_element(genes.begin(), genes.end());  // 1-based max
 
     Eigen::MatrixXd cor_mat = Eigen::MatrixXd::Zero(n_genes, n_genes);
-    std::vector<double> sum_weight(n_genes, 0.0);
+    std::vector<int> counts_per_gene(n_genes, 0);
+    for (int gi = 0; gi < n; ++gi) {
+        if (confidence[gi] < confidence_threshold) continue;
+        const int g = genes[gi] - 1;
+        if (g >= 0 && g < n_genes) counts_per_gene[g]++;
+    }
 
-    // Accumulate co-occurrence counts in per-thread local buffers to avoid
-    // false-sharing and atomic overhead, then reduce at the end.
+    std::vector<std::vector<int>> mols_by_gene(n_genes);
+    for (int g = 0; g < n_genes; ++g) mols_by_gene[g].reserve(counts_per_gene[g]);
+    for (int gi = 0; gi < n; ++gi) {
+        if (confidence[gi] < confidence_threshold) continue;
+        const int g = genes[gi] - 1;
+        if (g >= 0 && g < n_genes) mols_by_gene[g].push_back(gi);
+    }
+
+    // Build the correlation matrix row-by-row. This avoids keeping one dense
+    // n_genes x n_genes accumulation matrix per thread.
     #pragma omp parallel
     {
-        Eigen::MatrixXd local_cor = Eigen::MatrixXd::Zero(n_genes, n_genes);
-        std::vector<double> local_sw(n_genes, 0.0);
+        Eigen::VectorXd row = Eigen::VectorXd::Zero(n_genes);
 
-        #pragma omp for schedule(dynamic, 1024)
-        for (int gi = 0; gi < n; ++gi) {
-            if (confidence[gi] < confidence_threshold) continue;
-            int g2 = genes[gi] - 1;  // 0-based
-            int nc = adj_list.neighbor_count(gi);
-            const int32_t* nb_ids = adj_list.neighbor_ids(gi);
-            const double*  nb_wts = adj_list.neighbor_weights(gi);
+        #pragma omp for schedule(dynamic, 1)
+        for (int g2 = 0; g2 < n_genes; ++g2) {
+            row.setZero();
+            for (int gi : mols_by_gene[g2]) {
+                const int nc = adj_list.neighbor_count(gi);
+                const int32_t* nb_ids = adj_list.neighbor_ids(gi);
+                const double* nb_wts = adj_list.neighbor_weights(gi);
 
-            for (int ai = 0; ai < nc; ++ai) {
-                int nb = nb_ids[ai];
-                if (confidence[nb] < confidence_threshold) continue;
-                int g1 = genes[nb] - 1;  // 0-based
-                double cw = nb_wts[ai];
-                local_cor(g2, g1) += cw;
-                local_sw[g1]      += cw;
-                local_sw[g2]      += cw;
+                for (int ai = 0; ai < nc; ++ai) {
+                    const int nb = nb_ids[ai];
+                    if (confidence[nb] < confidence_threshold) continue;
+                    const int g1 = genes[nb] - 1;
+                    if (g1 < 0 || g1 >= n_genes) continue;
+                    row[g1] += nb_wts[ai];
+                }
             }
+            cor_mat.row(g2) = row.transpose();
         }
+    }
 
-        #pragma omp critical
-        {
-            cor_mat    += local_cor;
-            for (int i = 0; i < n_genes; ++i) sum_weight[i] += local_sw[i];
-        }
+    std::vector<double> sum_weight(n_genes, 0.0);
+    #pragma omp parallel for schedule(static)
+    for (int g = 0; g < n_genes; ++g) {
+        sum_weight[g] = cor_mat.row(g).sum() + cor_mat.col(g).sum();
     }
 
     for (int ci = 0; ci < n_genes; ++ci) {

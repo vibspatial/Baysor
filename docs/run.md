@@ -88,6 +88,9 @@ Outputs:
 - `-p,--plot`
 - `--skip-ncv-color`
 
+For the files written by each bundle, see [Outputs](outputs.md) and
+[Output Files](output_files.md).
+
 ## Config Files
 
 Most common protocol setups are captured in:

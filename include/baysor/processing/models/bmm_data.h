@@ -61,7 +61,7 @@ struct BmmData {
     // --- Accessors ---
     int n_molecules() const { return static_cast<int>(position_data.cols()); }
     int n_components() const { return static_cast<int>(components.size()); }
-    int n_genes() const { return components.empty() ? 0 : static_cast<int>(components[0].composition_params.counts.size()); }
+    int n_genes() const { return components.empty() ? 0 : components[0].composition_params.size(); }
 
     /// Assign molecule to component, updating segment bookkeeping
     void assign(int mol_id, int component_id);

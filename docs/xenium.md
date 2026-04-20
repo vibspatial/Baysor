@@ -61,6 +61,9 @@ For Xenium-origin inputs, this automatically produces Ranger-friendly:
 - `segmentation.csv`
 - `segmentation_polygons_2d.json`
 
+See [Output Files](output_files.md#legacy-bundle) for the meanings of those
+files.
+
 ## Xenium Explorer Handoff
 
 The recommended Explorer path is:

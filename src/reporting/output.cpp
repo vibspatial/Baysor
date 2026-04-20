@@ -299,7 +299,7 @@ static void write_doubles(hid_t grp, const char* name,
 }
 
 void save_matrix_to_loom(
-    const Eigen::SparseMatrix<float>& matrix,   // n_cells × n_genes
+    const Eigen::SparseMatrix<float, Eigen::RowMajor>& matrix,   // n_cells × n_genes
     const std::vector<std::string>& gene_names,
     const std::vector<std::string>& cell_names,
     const std::string& path,
@@ -321,8 +321,9 @@ void save_matrix_to_loom(
     {
         hsize_t dims[2]  = { static_cast<hsize_t>(n_cells),
                              static_cast<hsize_t>(n_genes) };
-        hsize_t chunk[2] = { static_cast<hsize_t>(std::min(n_cells, 64)),
-                             static_cast<hsize_t>(std::min(n_genes, 64)) };
+        constexpr int row_block = 128;
+        hsize_t chunk[2] = { static_cast<hsize_t>(std::min(n_cells, row_block)),
+                             static_cast<hsize_t>(std::min(n_genes, 256)) };
 
         hid_t space  = H5Screate_simple(2, dims, nullptr);
         hid_t plist  = H5Pcreate(H5P_DATASET_CREATE);
@@ -334,31 +335,38 @@ void save_matrix_to_loom(
                                H5P_DEFAULT, plist, H5P_DEFAULT);
         check(ds, "create /matrix");
 
-        // Write row-by-row (one dense cell vector at a time) to avoid
-        // materialising the full dense matrix.
-        Eigen::SparseMatrix<float, Eigen::RowMajor> rm(matrix);
-        std::vector<float> row_buf(n_genes, 0.0f);
+        // Write in row blocks to reduce HDF5 call overhead without
+        // materializing the full dense matrix.
+        std::vector<float> block_buf(static_cast<size_t>(row_block) * static_cast<size_t>(n_genes), 0.0f);
+        hsize_t block_offset[2] = {0, 0};
 
-        hsize_t row_dims[2]   = {1, static_cast<hsize_t>(n_genes)};
-        hsize_t row_offset[2] = {0, 0};
-        hid_t mem_space = H5Screate_simple(2, row_dims, nullptr);
-
-        for (int i = 0; i < n_cells; ++i) {
-            std::fill(row_buf.begin(), row_buf.end(), 0.0f);
-            for (Eigen::SparseMatrix<float, Eigen::RowMajor>::InnerIterator it(rm, i);
-                 it; ++it) {
-                row_buf[it.col()] = it.value();
+        for (int block_start = 0; block_start < n_cells; block_start += row_block) {
+            int n_block_rows = std::min(row_block, n_cells - block_start);
+            std::fill(block_buf.begin(), block_buf.begin() + static_cast<size_t>(n_block_rows) * static_cast<size_t>(n_genes), 0.0f);
+            for (int local_row = 0; local_row < n_block_rows; ++local_row) {
+                int row = block_start + local_row;
+                float* row_ptr = block_buf.data() + static_cast<size_t>(local_row) * static_cast<size_t>(n_genes);
+                for (Eigen::SparseMatrix<float, Eigen::RowMajor>::InnerIterator it(matrix, row); it; ++it) {
+                    row_ptr[it.col()] = it.value();
+                }
             }
-            row_offset[0] = static_cast<hsize_t>(i);
+
+            hsize_t block_dims[2] = {
+                static_cast<hsize_t>(n_block_rows),
+                static_cast<hsize_t>(n_genes)
+            };
+            block_offset[0] = static_cast<hsize_t>(block_start);
+
             hid_t file_space = H5Dget_space(ds);
             H5Sselect_hyperslab(file_space, H5S_SELECT_SET,
-                                row_offset, nullptr, row_dims, nullptr);
+                                block_offset, nullptr, block_dims, nullptr);
+            hid_t mem_space = H5Screate_simple(2, block_dims, nullptr);
             H5Dwrite(ds, H5T_NATIVE_FLOAT, mem_space, file_space, H5P_DEFAULT,
-                     row_buf.data());
+                     block_buf.data());
+            H5Sclose(mem_space);
             H5Sclose(file_space);
         }
 
-        H5Sclose(mem_space);
         H5Dclose(ds);
         H5Pclose(plist);
         H5Sclose(space);
@@ -405,6 +413,17 @@ void save_matrix_to_loom(
     }
 
     H5Fclose(fid);
+}
+
+void save_matrix_to_loom(
+    const Eigen::SparseMatrix<float>& matrix,
+    const std::vector<std::string>& gene_names,
+    const std::vector<std::string>& cell_names,
+    const std::string& path,
+    const LoomColAttrs& col_attrs
+) {
+    Eigen::SparseMatrix<float, Eigen::RowMajor> row_major(matrix);
+    save_matrix_to_loom(row_major, gene_names, cell_names, path, col_attrs);
 }
 
 void save_matrix_to_10x_h5(
@@ -692,17 +711,24 @@ void save_matrix_to_tsv(const Eigen::SparseMatrix<double>& matrix,
     std::ofstream f(path);
     if (!f) throw std::runtime_error("save_matrix_to_tsv: cannot open " + path);
 
+    const int n_cells = static_cast<int>(matrix.rows());
+    const int n_genes = static_cast<int>(matrix.cols());
+    if (static_cast<int>(gene_names.size()) != n_genes)
+        throw std::runtime_error("save_matrix_to_tsv: gene_names length mismatch");
+    if (static_cast<int>(cell_names.size()) != n_cells)
+        throw std::runtime_error("save_matrix_to_tsv: cell_names length mismatch");
+
     // Header: cell names
     f << "gene";
     for (const auto& cn : cell_names) f << '\t' << cn;
     f << '\n';
 
-    // Convert to column-major for efficient row iteration
-    Eigen::SparseMatrix<double, Eigen::RowMajor> rm(matrix);
-    int n_genes = static_cast<int>(rm.rows());
+    // Write one row per gene. Internally counts are stored as n_cells x n_genes,
+    // so transpose first to get a gene x cell sparse matrix with cheap row access.
+    Eigen::SparseMatrix<double, Eigen::RowMajor> rm(matrix.transpose());
     for (int gi = 0; gi < n_genes; ++gi) {
         f << gene_names[gi];
-        // Dense row output (sparse matrix — iterate nonzeros + fill zeros)
+        // Dense row output (sparse matrix — iterate nonzeros + fill zeros).
         std::vector<double> row(cell_names.size(), 0.0);
         for (Eigen::SparseMatrix<double, Eigen::RowMajor>::InnerIterator it(rm, gi); it; ++it) {
             row[it.col()] = it.value();

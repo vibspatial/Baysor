@@ -24,6 +24,8 @@
 
 #include <Eigen/Dense>
 
+#include <algorithm>
+#include <cmath>
 #include <cstdlib>
 #include <fstream>
 #include <iostream>
@@ -60,11 +62,7 @@ int cmd_run(
     spdlog::info("Loaded {} transcripts, {} genes.", data.n_molecules(), data.n_genes());
 
     fill_and_check_plotting_options(opts.plotting, opts.molecules.min_molecules_per_cell, data.n_genes());
-
-    if (opts.segmentation.n_cells_init <= 0) {
-        opts.segmentation.n_cells_init = default_param_value(
-            "n_cells_init", opts.molecules.min_molecules_per_cell, data.n_molecules());
-    }
+    const bool infer_n_cells_init = opts.segmentation.n_cells_init <= 0;
 
     // Load prior segmentation if provided
     if (opts.prior.type != PriorInputType::None) {
@@ -76,6 +74,52 @@ int cmd_run(
             opts.segmentation.scale = scale;
             opts.segmentation.scale_std = std::to_string(scale_std);
         }
+    }
+
+    if (infer_n_cells_init) {
+        int inferred_n_cells_init = default_param_value(
+            "n_cells_init", opts.molecules.min_molecules_per_cell, data.n_molecules());
+
+        if (!data.prior_segmentation.empty()) {
+            int max_label = *std::max_element(data.prior_segmentation.begin(), data.prior_segmentation.end());
+            if (max_label > 0) {
+                std::vector<int> seg_counts(max_label + 1, 0);
+                int n_unassigned = 0;
+                for (int lab : data.prior_segmentation) {
+                    if (lab > 0) {
+                        seg_counts[lab]++;
+                    } else {
+                        ++n_unassigned;
+                    }
+                }
+
+                int n_active_prior_segments = 0;
+                for (int lab = 1; lab <= max_label; ++lab) {
+                    if (seg_counts[lab] > 0) ++n_active_prior_segments;
+                }
+
+                if (n_active_prior_segments > 0) {
+                    constexpr double prior_segment_multiplier = 2.25;
+                    constexpr double unassigned_multiplier = 2.0;
+                    int prior_based_n_cells_init = static_cast<int>(std::ceil(
+                        prior_segment_multiplier * static_cast<double>(n_active_prior_segments) +
+                        unassigned_multiplier * static_cast<double>(n_unassigned) /
+                            std::max(opts.molecules.min_molecules_per_cell, 1)
+                    ));
+                    prior_based_n_cells_init = std::max(prior_based_n_cells_init, n_active_prior_segments);
+                    inferred_n_cells_init = std::min(inferred_n_cells_init, prior_based_n_cells_init);
+
+                    spdlog::info(
+                        "Using prior-aware n_cells_init={} (active prior segments={}, unassigned molecules={}, "
+                        "default without prior would be {}).",
+                        inferred_n_cells_init, n_active_prior_segments, n_unassigned,
+                        default_param_value("n_cells_init", opts.molecules.min_molecules_per_cell, data.n_molecules())
+                    );
+                }
+            }
+        }
+
+        opts.segmentation.n_cells_init = inferred_n_cells_init;
     }
 
     if (opts.segmentation.scale <= 0) {
@@ -197,16 +241,15 @@ int cmd_run(
             spdlog::info("Computing neighborhood composition colors...");
             int comp_k = opts.plotting.gene_composition_neighborhood;
             auto pos = data.position_matrix();
-            auto neighb_cm = neighborhood_count_matrix(pos, data.gene, comp_k, data.n_genes());
-            for (int k = 0; k < neighb_cm.outerSize(); ++k)
-                for (Eigen::SparseMatrix<float>::InnerIterator it(neighb_cm, k); it; ++it)
-                    it.valueRef() = static_cast<float>(std::log(it.value() * 10000.0f + 1e-5f));
-            auto mol_vecs = estimate_gene_vectors(neighb_cm, data.gene, 20, "ri", true);
             if (plot) {
-                ncv_report = gene_composition_report_embedding(mol_vecs, data.confidence);
+                ncv_report = gene_composition_report_embedding_streaming(
+                    pos, data.gene, data.n_genes(), data.confidence, comp_k
+                );
                 ncv_color = ncv_report->colors;
             } else {
-                ncv_color = gene_composition_color_embedding(mol_vecs, data.confidence);
+                ncv_color = gene_composition_color_embedding_streaming(
+                    pos, data.gene, data.n_genes(), data.confidence, comp_k
+                );
             }
         }
 
@@ -401,15 +444,18 @@ int cmd_run(
                     trips.emplace_back(ci, g, v);
                 }
             }
-            Eigen::SparseMatrix<float> cm(n_cells_final, ng);
-            cm.setFromTriplets(trips.begin(), trips.end());
-
             if (output_style == OutputStyle::Parquet) {
+                Eigen::SparseMatrix<float> cm(n_cells_final, ng);
+                cm.setFromTriplets(trips.begin(), trips.end());
                 save_matrix_to_10x_h5(cm, data.gene_names, cell_names_cm, out_paths.counts);
             } else if (count_matrix_format == "tsv") {
+                Eigen::SparseMatrix<float> cm(n_cells_final, ng);
+                cm.setFromTriplets(trips.begin(), trips.end());
                 Eigen::SparseMatrix<double> cm_d = cm.cast<double>();
                 save_matrix_to_tsv(cm_d, data.gene_names, cell_names_cm, out_paths.counts);
             } else {
+                Eigen::SparseMatrix<float, Eigen::RowMajor> cm(n_cells_final, ng);
+                cm.setFromTriplets(trips.begin(), trips.end());
                 save_matrix_to_loom(cm, data.gene_names, cell_names_cm, out_paths.counts);
             }
         }
@@ -514,17 +560,9 @@ int cmd_preview(
     // Gene composition colors
     spdlog::info("Estimating local colors...");
     int comp_k = opts.plotting.gene_composition_neighborhood;
-    auto neighb_cm = neighborhood_count_matrix(pos, data.gene, comp_k, data.n_genes());
-
-    // Log-transform (matching Julia: log(nzval * 10000 + 1e-5))
-    for (int k = 0; k < neighb_cm.outerSize(); ++k) {
-        for (Eigen::SparseMatrix<float>::InnerIterator it(neighb_cm, k); it; ++it) {
-            it.valueRef() = static_cast<float>(std::log(it.value() * 10000.0f + 1e-5f));
-        }
-    }
-
-    auto mol_vecs   = estimate_gene_vectors(neighb_cm, data.gene, 20, "ri", true);
-    auto gene_colors = gene_composition_color_embedding(mol_vecs, data.confidence);
+    auto gene_colors = gene_composition_color_embedding_streaming(
+        pos, data.gene, data.n_genes(), data.confidence, comp_k
+    );
     spdlog::info("Done.");
 
     // Gene structure embedding (reuses adj_list already built above)

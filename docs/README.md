@@ -13,6 +13,7 @@ Current pages:
 - [Input Data](inputs.md)
 - [Prior Segmentation Inputs](priors.md)
 - [Outputs](outputs.md)
+- [Output Files](output_files.md)
 - [Xenium Workflow](xenium.md)
 - [Configuration](configuration.md)
 - [Examples](examples.md)

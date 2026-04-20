@@ -48,13 +48,15 @@ Several header-only dependencies are fetched automatically by CMake.
 ### Configure and build
 
 ```bash
-cmake -S . -B build
-cmake --build build
+cmake -S . -B build -DBAYSOR_WITH_TESTS=OFF
+cmake --build build --target baysor -j"$(nproc)"
 ```
 
 ### Run tests
 
 ```bash
+cmake -S . -B build
+cmake --build build --target baysor baysor_tests -j"$(nproc)"
 ctest --test-dir build --output-on-failure
 ```
 
