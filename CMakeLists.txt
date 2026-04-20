@@ -186,6 +186,9 @@ if(BAYSOR_WITH_TESTS)
         tests/test_main.cpp
     )
     target_link_libraries(baysor_tests PRIVATE baysor_lib GTest::gtest_main)
+    target_compile_definitions(baysor_tests PRIVATE
+        BAYSOR_TEST_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
+    )
     if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
         target_compile_options(baysor_tests PRIVATE -Wno-stringop-overflow)
     endif()

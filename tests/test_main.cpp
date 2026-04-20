@@ -1842,15 +1842,14 @@ TEST(Xenium, ManifestHelpers) {
     EXPECT_TRUE(baysor::is_xenium_manifest_path("experiment.xenium"));
     EXPECT_FALSE(baysor::is_xenium_manifest_path("transcripts.parquet"));
 
-    const std::string manifest_path =
-        "../examples/Xenium_pancreas_membrane_377/data/experiment.xenium";
-    auto ctx = baysor::load_xenium_manifest_context(
-        manifest_path);
+    const std::filesystem::path dataset_dir =
+        std::filesystem::path(BAYSOR_TEST_SOURCE_DIR) /
+        "examples/Xenium_pancreas_membrane_377/data";
+    const std::string manifest_path = (dataset_dir / "experiment.xenium").string();
+    auto ctx = baysor::load_xenium_manifest_context(manifest_path);
     EXPECT_EQ(ctx.manifest_path, manifest_path);
-    EXPECT_EQ(ctx.dataset_dir,
-              "../examples/Xenium_pancreas_membrane_377/data");
-    EXPECT_EQ(ctx.transcripts_path,
-              "../examples/Xenium_pancreas_membrane_377/data/transcripts.parquet");
+    EXPECT_EQ(ctx.dataset_dir, dataset_dir.string());
+    EXPECT_EQ(ctx.transcripts_path, (dataset_dir / "transcripts.parquet").string());
 }
 
 // ============================================================================
