@@ -186,19 +186,51 @@ int cmd_run(
     int n_cells   = opts.segmentation.n_cells_init;
     const std::string& scale_std = opts.segmentation.scale_std;
 
-    // Optional molecule clustering (pre-segmentation cell type assignment)
-    // Uses ICA initialization (matching Julia), falls back to hash init on failure.
+    // Optional molecule clustering (pre-segmentation cell type assignment).
+    // Produces a coarse compatibility prior for segmentation; the default
+    // ICA/MRF path matches Julia, while alternative methods plug into the
+    // same dispatcher and downstream contract.
     std::vector<int> mol_clusters;
     std::optional<ClusteringResult> clustering_result;
-    if (opts.segmentation.n_clusters > 1) {
-        spdlog::info("Clustering molecules into {} types (ICA init)...",
-                     opts.segmentation.n_clusters);
-        clustering_result = cluster_molecules_ica(
-            data.gene, adj_list, data.confidence,
-            opts.segmentation.n_clusters,
-            /*tol=*/0.01, /*mrf_weight=*/1.0, /*max_iters=*/-1, /*verbose=*/true);
-        mol_clusters = clustering_result->assignment;  // 1-based cluster IDs
-        spdlog::info("Molecule clustering complete.");
+    {
+        ClusteringOptions clustering_opts;
+        clustering_opts.method = opts.segmentation.cluster_method;
+        clustering_opts.n_clusters = opts.segmentation.n_clusters;
+        clustering_opts.resolution = opts.segmentation.cluster_resolution;
+        clustering_opts.graph_k = opts.segmentation.cluster_graph_k;
+        clustering_opts.spatial_k = opts.plotting.gene_composition_neighborhood;
+        clustering_opts.n_dims = opts.segmentation.cluster_n_dims;
+        clustering_opts.basis_sample_size = opts.segmentation.cluster_basis_sample_size;
+
+        const bool run_clustering =
+            clustering_opts.method == ClusterMethod::Louvain ||
+            clustering_opts.method == ClusterMethod::Leiden ||
+            (clustering_opts.method == ClusterMethod::Mrf && clustering_opts.n_clusters > 1);
+
+        if (run_clustering) {
+            if (clustering_opts.method == ClusterMethod::Mrf) {
+                spdlog::info("Clustering molecules into {} types (ICA init)...",
+                             clustering_opts.n_clusters);
+            } else if (clustering_opts.method == ClusterMethod::Louvain) {
+                spdlog::info("Clustering molecules with Louvain on NCV kNN graph (k={})...",
+                             clustering_opts.graph_k);
+            } else {
+                spdlog::info("Clustering molecules with Leiden on NCV kNN graph (k={})...",
+                             clustering_opts.graph_k);
+            }
+
+            clustering_result = cluster_molecules(
+                (clustering_opts.method == ClusterMethod::Louvain ||
+                 clustering_opts.method == ClusterMethod::Leiden)
+                    ? data.position_matrix() : Eigen::MatrixXd(),
+                data.gene, adj_list, data.confidence,
+                clustering_opts, /*verbose=*/true
+            );
+            if (clustering_result && !clustering_result->assignment.empty()) {
+                mol_clusters = clustering_result->assignment;  // 1-based cluster IDs
+                spdlog::info("Molecule clustering complete.");
+            }
+        }
     }
 
     // Dispatch on dimensionality
@@ -239,16 +271,23 @@ int cmd_run(
         std::optional<NcvReportEmbedding> ncv_report;
         if (!skip_ncv_color) {
             spdlog::info("Computing neighborhood composition colors...");
-            int comp_k = opts.plotting.gene_composition_neighborhood;
+            int ncv_spatial_k = opts.plotting.gene_composition_neighborhood;
+            int ncv_graph_k = opts.segmentation.cluster_graph_k;
             auto pos = data.position_matrix();
+            const NcvProjectedModel* shared_ncv_model =
+                (clustering_result && clustering_result->ncv_projected_model)
+                    ? clustering_result->ncv_projected_model.get()
+                    : nullptr;
             if (plot) {
                 ncv_report = gene_composition_report_embedding_streaming(
-                    pos, data.gene, data.n_genes(), data.confidence, comp_k
+                    pos, data.gene, data.n_genes(), data.confidence, ncv_spatial_k,
+                    100000, 20000, 42, 10, ncv_graph_k, shared_ncv_model
                 );
                 ncv_color = ncv_report->colors;
             } else {
                 ncv_color = gene_composition_color_embedding_streaming(
-                    pos, data.gene, data.n_genes(), data.confidence, comp_k
+                    pos, data.gene, data.n_genes(), data.confidence, ncv_spatial_k,
+                    100000, 20000, 42, 10, ncv_graph_k, shared_ncv_model
                 );
             }
         }
@@ -559,9 +598,11 @@ int cmd_preview(
 
     // Gene composition colors
     spdlog::info("Estimating local colors...");
-    int comp_k = opts.plotting.gene_composition_neighborhood;
+    int ncv_spatial_k = opts.plotting.gene_composition_neighborhood;
+    int ncv_graph_k = opts.segmentation.cluster_graph_k;
     auto gene_colors = gene_composition_color_embedding_streaming(
-        pos, data.gene, data.n_genes(), data.confidence, comp_k
+        pos, data.gene, data.n_genes(), data.confidence, ncv_spatial_k,
+        100000, 20000, 42, 10, ncv_graph_k
     );
     spdlog::info("Done.");
 
@@ -691,6 +732,7 @@ int main(int argc, char* argv[]) {
     std::string run_output_style = "legacy";
     std::string run_polygon_format = "FeatureCollection";
     std::string run_count_format = "loom";
+    std::string run_cluster_method = cluster_method_to_string(opts.segmentation.cluster_method);
     bool run_plot = false;
     bool run_skip_ncv_color = false;
 
@@ -718,8 +760,18 @@ int main(int argc, char* argv[]) {
         "Approximate cell radius. Sets estimate-scale-from-centers to false");
     run->add_option("--scale-std", opts.segmentation.scale_std,
         "Std of scale across cells. Number or 'N%' relative to scale (default: 25%)");
+    run->add_option("--cluster-method", run_cluster_method,
+        "Molecule clustering prior: mrf, louvain, leiden, or none (default: mrf; legacy alias: ica_mrf)");
     run->add_option("--n-clusters", opts.segmentation.n_clusters,
-        "Number of molecule clusters / major cell types (default: 4)");
+        "Target number of molecule clusters / major cell types (exact for mrf; merged target for louvain/leiden; default: 4 for mrf, 10 for louvain/leiden)");
+    run->add_option("--cluster-resolution", opts.segmentation.cluster_resolution,
+        "Advanced overclustering resolution for cluster-method=louvain or leiden (default: 1.0)");
+    run->add_option("--cluster-graph-k", opts.segmentation.cluster_graph_k,
+        "Number of NCV nearest neighbors used for graph clustering and NCV UMAPs (default: 15)");
+    run->add_option("--cluster-n-dims", opts.segmentation.cluster_n_dims,
+        "Number of NCV dimensions used by cluster-method=louvain or leiden (default: 20)");
+    run->add_option("--cluster-basis-sample-size", opts.segmentation.cluster_basis_sample_size,
+        "Maximum number of basis anchors used by cluster-method=louvain or leiden (default: 100000)");
     run->add_option("--prior-segmentation-confidence", opts.segmentation.prior_segmentation_confidence,
         "Confidence of prior segmentation results, in [0,1] (default: 0.2)");
     run->add_option("--min-molecules-per-gene", opts.molecules.min_molecules_per_gene,
@@ -876,6 +928,15 @@ int main(int argc, char* argv[]) {
     // Dispatch
     try {
         if (run->parsed()) {
+            try {
+                opts.segmentation.cluster_method = parse_cluster_method(run_cluster_method);
+            } catch (const std::exception& e) {
+                spdlog::error("{}", e.what());
+                return 1;
+            }
+            if (opts.segmentation.n_clusters <= 0) {
+                opts.segmentation.n_clusters = default_cluster_count(opts.segmentation.cluster_method);
+            }
             OutputStyle output_style;
             try {
                 output_style = parse_output_style(run_output_style);

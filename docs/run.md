@@ -64,7 +64,12 @@ Segmentation scale / convergence:
 - `--iters`
 - `--tol`
 - `--n-cells-init`
+- `--cluster-method`
 - `--n-clusters`
+- `--cluster-resolution`
+- `--cluster-graph-k`
+- `--cluster-n-dims`
+- `--cluster-basis-sample-size`
 
 Filtering:
 
@@ -90,6 +95,39 @@ Outputs:
 
 For the files written by each bundle, see [Outputs](outputs.md) and
 [Output Files](output_files.md).
+
+## Clustering Methods
+
+`run` supports four clustering modes:
+
+- `mrf`
+  - the legacy Baysor molecule clustering path
+  - default mode
+  - `--n-clusters` is the exact number of molecule clusters to fit
+  - default `n_clusters`: `4`
+- `louvain`
+  - graph clustering on NCV basis anchors, followed by label transfer to all
+    molecules
+  - `--n-clusters` is the target final coarse cluster count after anchor
+    communities are merged
+  - default `n_clusters`: `10`
+- `leiden`
+  - same anchor-based NCV workflow as `louvain`, with Leiden refinement
+  - `--n-clusters` is again the target final coarse cluster count
+  - default `n_clusters`: `10`
+- `none`
+  - disables the clustering prior entirely
+
+Examples:
+
+```bash
+./build/baysor run --cluster-method mrf --n-clusters 4 ...
+./build/baysor run --cluster-method louvain --n-clusters 10 ...
+./build/baysor run --cluster-method leiden --n-clusters 10 ...
+```
+
+`--cluster-resolution` and `--cluster-graph-k` are advanced controls for the
+graph methods. In most datasets, the defaults are a reasonable starting point.
 
 ## Config Files
 

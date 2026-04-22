@@ -678,7 +678,8 @@ Eigen::MatrixXf project_neighborhood_vectors(
     const std::vector<double>* confidences,
     bool normalize_by_dist,
     bool normalize,
-    double distance_floor
+    double distance_floor,
+    bool log_transform
 ) {
     const int n_total = static_cast<int>(pos_data.cols());
     std::vector<int> ids = make_query_ids(n_total, query_ids);
@@ -686,7 +687,7 @@ Eigen::MatrixXf project_neighborhood_vectors(
     Eigen::MatrixXf out = Eigen::MatrixXf::Zero(gene_emb_t.rows(), static_cast<int>(ids.size()));
     stream_projected_neighborhood_vectors(
         pos_data, genes, k, gene_emb_t, n_genes, &ids, confidences,
-        normalize_by_dist, normalize, distance_floor, 32768,
+        normalize_by_dist, normalize, distance_floor, log_transform, 32768,
         [&](int block_start, const std::vector<int>&, const Eigen::MatrixXf& block_vecs) {
             out.middleCols(block_start, block_vecs.cols()) = block_vecs;
         }
@@ -705,6 +706,7 @@ void stream_projected_neighborhood_vectors(
     bool normalize_by_dist,
     bool normalize,
     double distance_floor,
+    bool log_transform,
     int block_size,
     const std::function<void(int, const std::vector<int>&, const Eigen::MatrixXf&)>& callback
 ) {
@@ -794,6 +796,7 @@ void stream_projected_neighborhood_vectors(
                             float value = scratch.counts[gene];
                             scratch.counts[gene] = 0.0f;
                             if (normalize && total > 0.0f) value /= total;
+                            if (log_transform) value = static_cast<float>(std::log(value * 10000.0f + 1e-5f));
                             if (value > 1e-5f) col.noalias() += value * gene_emb_t.col(gene);
                         }
                     }

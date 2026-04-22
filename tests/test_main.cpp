@@ -1403,6 +1403,7 @@ TEST(Options, LoadConfigFromToml) {
         "\n"
         "[segmentation]\n"
         "scale = 7.5\n"
+        "cluster_method = \"louvain\"\n"
         "n_clusters = 6\n",
         ".toml"
     );
@@ -1414,9 +1415,40 @@ TEST(Options, LoadConfigFromToml) {
     EXPECT_EQ(opts.prior.column_name, "cell_id");
     EXPECT_EQ(opts.prior.unassigned_label, "UNASSIGNED");
     EXPECT_DOUBLE_EQ(opts.segmentation.scale, 7.5);
+    EXPECT_EQ(opts.segmentation.cluster_method, baysor::ClusterMethod::Louvain);
     EXPECT_EQ(opts.segmentation.n_clusters, 6);
 
     std::remove(path.c_str());
+}
+
+TEST(Options, LoadConfigAssignsMethodSpecificClusterDefault) {
+    auto path = write_temp_csv(
+        "[molecules]\n"
+        "min_molecules_per_cell = 30\n"
+        "\n"
+        "[segmentation]\n"
+        "cluster_method = \"louvain\"\n",
+        ".toml"
+    );
+
+    auto opts = baysor::load_config(path);
+
+    EXPECT_EQ(opts.segmentation.cluster_method, baysor::ClusterMethod::Louvain);
+    EXPECT_EQ(opts.segmentation.n_clusters, 10);
+
+    std::remove(path.c_str());
+}
+
+TEST(Options, ParseClusterMethodAcceptsLegacyAlias) {
+    EXPECT_EQ(baysor::parse_cluster_method("mrf"), baysor::ClusterMethod::Mrf);
+    EXPECT_EQ(baysor::parse_cluster_method("ica_mrf"), baysor::ClusterMethod::Mrf);
+    EXPECT_EQ(baysor::parse_cluster_method("ica"), baysor::ClusterMethod::Mrf);
+    EXPECT_EQ(baysor::parse_cluster_method("leiden"), baysor::ClusterMethod::Leiden);
+    EXPECT_EQ(baysor::cluster_method_to_string(baysor::ClusterMethod::Mrf), "mrf");
+    EXPECT_EQ(baysor::cluster_method_to_string(baysor::ClusterMethod::Leiden), "leiden");
+    EXPECT_EQ(baysor::default_cluster_count(baysor::ClusterMethod::Mrf), 4);
+    EXPECT_EQ(baysor::default_cluster_count(baysor::ClusterMethod::Louvain), 10);
+    EXPECT_EQ(baysor::default_cluster_count(baysor::ClusterMethod::Leiden), 10);
 }
 
 // ============================================================================
@@ -2183,6 +2215,273 @@ TEST(MoleculeClustering, IcaWrapperMatchesJuliaPartition) {
         << " swapped=" << format_int_vector(swapped);
 }
 
+TEST(MoleculeClustering, LouvainPartitionSeparatesWeaklyConnectedCliques) {
+    const int edge_src[] = {0, 1, 0, 3, 4, 3, 2};
+    const int edge_dst[] = {1, 2, 2, 4, 5, 5, 3};
+    const double edge_wt[] = {3.0, 3.0, 3.0, 3.0, 3.0, 3.0, 0.05};
+    auto adj = baysor::AdjList::from_edge_list(edge_src, edge_dst, edge_wt, 7, 6);
+
+    auto membership = baysor::louvain_partition(adj, /*resolution=*/1.0, /*max_passes=*/100);
+
+    ASSERT_EQ(membership.size(), 6u);
+    EXPECT_EQ(membership[0], membership[1]);
+    EXPECT_EQ(membership[1], membership[2]);
+    EXPECT_EQ(membership[3], membership[4]);
+    EXPECT_EQ(membership[4], membership[5]);
+    EXPECT_NE(membership[2], membership[3]);
+}
+
+TEST(MoleculeClustering, LouvainPartitionKeepsCompleteGraphTogether) {
+    constexpr int n = 12;
+    std::vector<int> src, dst;
+    std::vector<double> wts;
+    for (int i = 0; i < n; ++i) {
+        for (int j = i + 1; j < n; ++j) {
+            src.push_back(i);
+            dst.push_back(j);
+            wts.push_back(1.0);
+        }
+    }
+
+    auto adj = baysor::AdjList::from_edge_list(
+        src.data(), dst.data(), wts.data(), static_cast<int>(src.size()), n);
+    auto membership = baysor::louvain_partition(adj, /*resolution=*/1.0, /*max_passes=*/100);
+
+    ASSERT_EQ(membership.size(), static_cast<size_t>(n));
+    for (int i = 1; i < n; ++i) {
+        EXPECT_EQ(membership[i], membership[0]);
+    }
+}
+
+TEST(MoleculeClustering, LouvainPartitionFindsThreeDenseBlocks) {
+    constexpr int blocks = 3;
+    constexpr int block_size = 8;
+    constexpr int n = blocks * block_size;
+    std::vector<int> src, dst;
+    std::vector<double> wts;
+
+    for (int b = 0; b < blocks; ++b) {
+        const int start = b * block_size;
+        const int end = start + block_size;
+        for (int i = start; i < end; ++i) {
+            for (int j = i + 1; j < end; ++j) {
+                src.push_back(i);
+                dst.push_back(j);
+                wts.push_back(1.0);
+            }
+        }
+    }
+    // Weak inter-block links.
+    for (int b = 0; b < blocks; ++b) {
+        const int b2 = (b + 1) % blocks;
+        src.push_back(b * block_size);
+        dst.push_back(b2 * block_size);
+        wts.push_back(0.02);
+    }
+
+    auto adj = baysor::AdjList::from_edge_list(
+        src.data(), dst.data(), wts.data(), static_cast<int>(src.size()), n);
+    auto membership = baysor::louvain_partition(adj, /*resolution=*/1.0, /*max_passes=*/100);
+
+    ASSERT_EQ(membership.size(), static_cast<size_t>(n));
+    std::set<int> groups(membership.begin(), membership.end());
+    EXPECT_EQ(groups.size(), 3u);
+    for (int b = 0; b < blocks; ++b) {
+        const int start = b * block_size;
+        for (int i = start + 1; i < start + block_size; ++i) {
+            EXPECT_EQ(membership[i], membership[start]);
+        }
+    }
+}
+
+TEST(MoleculeClustering, LouvainResolutionSplitsHierarchicalBlocks) {
+    constexpr int superblocks = 3;
+    constexpr int subblocks_per_super = 2;
+    constexpr int block_size = 6;
+    constexpr int blocks = superblocks * subblocks_per_super;
+    constexpr int n = blocks * block_size;
+    std::vector<int> src, dst;
+    std::vector<double> wts;
+
+    auto add_clique = [&](int start, int size, double w) {
+        for (int i = start; i < start + size; ++i) {
+            for (int j = i + 1; j < start + size; ++j) {
+                src.push_back(i);
+                dst.push_back(j);
+                wts.push_back(w);
+            }
+        }
+    };
+    auto add_complete_bipartite = [&](int start_a, int start_b, int size, double w) {
+        for (int i = start_a; i < start_a + size; ++i) {
+            for (int j = start_b; j < start_b + size; ++j) {
+                src.push_back(i);
+                dst.push_back(j);
+                wts.push_back(w);
+            }
+        }
+    };
+
+    for (int b = 0; b < blocks; ++b) {
+        add_clique(b * block_size, block_size, 1.0);
+    }
+    for (int s = 0; s < superblocks; ++s) {
+        const int a = (2 * s + 0) * block_size;
+        const int b = (2 * s + 1) * block_size;
+        add_complete_bipartite(a, b, block_size, 0.35);
+    }
+    // Weakly connect the three superblocks in a chain.
+    for (int s = 0; s < superblocks - 1; ++s) {
+        src.push_back((2 * s) * block_size);
+        dst.push_back((2 * (s + 1)) * block_size);
+        wts.push_back(0.01);
+    }
+
+    auto adj = baysor::AdjList::from_edge_list(
+        src.data(), dst.data(), wts.data(), static_cast<int>(src.size()), n);
+    auto low_res = baysor::louvain_partition(adj, /*resolution=*/0.25, /*max_passes=*/100);
+    auto high_res = baysor::louvain_partition(adj, /*resolution=*/2.0, /*max_passes=*/100);
+
+    std::set<int> low_groups(low_res.begin(), low_res.end());
+    std::set<int> high_groups(high_res.begin(), high_res.end());
+    EXPECT_EQ(low_groups.size(), 3u);
+    EXPECT_EQ(high_groups.size(), 6u);
+}
+
+TEST(MoleculeClustering, LouvainOnLocalGraphTracksLocalPatchesNotRepeatedLatentTypes) {
+    // Six spatial patches arranged in a chain. Patches (0,3), (1,4), (2,5) are
+    // intended to represent repeated latent types, but the graph only contains
+    // local spatial edges, so Louvain can only recover local communities.
+    constexpr int patches = 6;
+    constexpr int patch_size = 5;
+    constexpr int n = patches * patch_size;
+    std::vector<int> src, dst;
+    std::vector<double> wts;
+
+    auto add_clique = [&](int start, int size, double w) {
+        for (int i = start; i < start + size; ++i) {
+            for (int j = i + 1; j < start + size; ++j) {
+                src.push_back(i);
+                dst.push_back(j);
+                wts.push_back(w);
+            }
+        }
+    };
+
+    for (int p = 0; p < patches; ++p) {
+        add_clique(p * patch_size, patch_size, 1.0);
+    }
+    for (int p = 0; p < patches - 1; ++p) {
+        src.push_back(p * patch_size);
+        dst.push_back((p + 1) * patch_size);
+        wts.push_back(0.02);
+    }
+
+    auto adj = baysor::AdjList::from_edge_list(
+        src.data(), dst.data(), wts.data(), static_cast<int>(src.size()), n);
+    auto membership = baysor::louvain_partition(adj, /*resolution=*/1.0, /*max_passes=*/100);
+
+    std::set<int> groups(membership.begin(), membership.end());
+    EXPECT_EQ(groups.size(), 6u);
+}
+
+TEST(MoleculeClustering, KnnSimilarityGraphConnectsRepeatedLatentTypes) {
+    constexpr int patches = 6;
+    constexpr int patch_size = 5;
+    constexpr int n = patches * patch_size;
+
+    Eigen::MatrixXf mol_vecs(2, n);
+    std::vector<double> confidence(n, 1.0);
+    for (int p = 0; p < patches; ++p) {
+        Eigen::Vector2f center;
+        switch (p % 3) {
+            case 0: center << 1.0f, 0.1f; break;
+            case 1: center << 0.1f, 1.0f; break;
+            default: center << -1.0f, 0.1f; break;
+        }
+        for (int i = 0; i < patch_size; ++i) {
+            const int idx = p * patch_size + i;
+            mol_vecs.col(idx) = center;
+            mol_vecs(0, idx) += 0.01f * static_cast<float>(i);
+            mol_vecs(1, idx) -= 0.01f * static_cast<float>(i);
+        }
+    }
+
+    auto adj = baysor::build_knn_similarity_graph(mol_vecs, confidence, /*k=*/4);
+    auto membership = baysor::louvain_partition(adj, /*resolution=*/1.0, /*max_passes=*/100);
+
+    std::set<int> groups(membership.begin(), membership.end());
+    EXPECT_EQ(groups.size(), 3u);
+    for (int i = 0; i < patch_size; ++i) {
+        EXPECT_EQ(membership[i], membership[3 * patch_size + i]);
+        EXPECT_EQ(membership[patch_size + i], membership[4 * patch_size + i]);
+        EXPECT_EQ(membership[2 * patch_size + i], membership[5 * patch_size + i]);
+    }
+}
+
+TEST(MoleculeClustering, GraphPartitionToTargetReturnsRequestedCountForLouvainAndLeiden) {
+    constexpr int patches = 6;
+    constexpr int patch_size = 5;
+    constexpr int n = patches * patch_size;
+
+    Eigen::MatrixXf mol_vecs(2, n);
+    std::vector<double> confidence(n, 1.0);
+    for (int p = 0; p < patches; ++p) {
+        Eigen::Vector2f center;
+        switch (p % 3) {
+            case 0: center << 1.0f, 0.1f; break;
+            case 1: center << 0.1f, 1.0f; break;
+            default: center << -1.0f, 0.1f; break;
+        }
+        for (int i = 0; i < patch_size; ++i) {
+            const int idx = p * patch_size + i;
+            mol_vecs.col(idx) = center;
+            mol_vecs(0, idx) += 0.01f * static_cast<float>(i);
+            mol_vecs(1, idx) -= 0.01f * static_cast<float>(i);
+        }
+    }
+
+    auto adj = baysor::build_knn_similarity_graph(mol_vecs, confidence, /*k=*/4);
+
+    baysor::GraphClusteringSummary lou_summary;
+    auto louvain = baysor::graph_partition_to_target(
+        adj, mol_vecs, confidence, baysor::ClusterMethod::Louvain,
+        /*target_clusters=*/3, /*resolution_seed=*/1.0, /*max_passes=*/100, &lou_summary
+    );
+    baysor::GraphClusteringSummary lei_summary;
+    auto leiden = baysor::graph_partition_to_target(
+        adj, mol_vecs, confidence, baysor::ClusterMethod::Leiden,
+        /*target_clusters=*/3, /*resolution_seed=*/1.0, /*max_passes=*/100, &lei_summary
+    );
+
+    std::set<int> lou_groups(louvain.begin(), louvain.end());
+    std::set<int> lei_groups(leiden.begin(), leiden.end());
+    EXPECT_EQ(lou_groups.size(), 3u);
+    EXPECT_EQ(lei_groups.size(), 3u);
+    EXPECT_EQ(lou_summary.final_clusters, 3);
+    EXPECT_EQ(lei_summary.final_clusters, 3);
+}
+
+TEST(MoleculeClustering, DispatcherReturnsEmptyForNoneMethod) {
+    Eigen::MatrixXd pos(2, 2);
+    pos <<
+        0.0, 1.0,
+        0.0, 0.0;
+    std::vector<int> genes = {1, 2};
+    std::vector<double> confidence = {1.0, 1.0};
+    const int edge_src[] = {0};
+    const int edge_dst[] = {1};
+    const double edge_wt[] = {1.0};
+    auto adj = baysor::AdjList::from_edge_list(edge_src, edge_dst, edge_wt, 1, 2);
+
+    baysor::ClusteringOptions opts;
+    opts.method = baysor::ClusterMethod::None;
+
+    auto result = baysor::cluster_molecules(pos, genes, adj, confidence, opts, /*verbose=*/false);
+    EXPECT_TRUE(result.assignment.empty());
+    EXPECT_TRUE(result.diffs.empty());
+}
+
 // ============================================================================
 // Neighborhood composition
 // ============================================================================
@@ -2248,6 +2547,39 @@ TEST(NeighborhoodComposition, EstimateGeneVectorsPerMolecule) {
     // Should be 5 (components) x 10 (molecules)
     EXPECT_EQ(mol_vecs.rows(), 5);
     EXPECT_EQ(mol_vecs.cols(), 10);
+}
+
+TEST(NeighborhoodComposition, ProjectNeighborhoodVectorsMatchesLoggedCountMatrixProjection) {
+    Eigen::MatrixXd pos(2, 8);
+    for (int i = 0; i < 8; ++i) {
+        pos(0, i) = static_cast<double>(i);
+        pos(1, i) = static_cast<double>(i % 2);
+    }
+    std::vector<int> genes = {1, 2, 3, 1, 2, 3, 1, 2};
+    std::vector<int> query_ids = {1, 3, 4, 6};
+
+    const int k_neighbors = 4;
+    const int n_genes = 3;
+    const double dist_floor = baysor::neighborhood_distance_floor(pos, &query_ids);
+
+    auto cm = baysor::neighborhood_count_matrix_subset(
+        pos, genes, query_ids, k_neighbors, n_genes, nullptr, true, true, dist_floor
+    );
+    for (int k = 0; k < cm.outerSize(); ++k) {
+        for (Eigen::SparseMatrix<float>::InnerIterator it(cm, k); it; ++it) {
+            it.valueRef() = static_cast<float>(std::log(it.value() * 10000.0f + 1e-5f));
+        }
+    }
+
+    auto gene_emb_t = baysor::estimate_gene_vectors(cm, genes, 4, "ri", false);
+    auto expected = baysor::project_gene_vectors(gene_emb_t, cm);
+    auto actual = baysor::project_neighborhood_vectors(
+        pos, genes, k_neighbors, gene_emb_t, n_genes, &query_ids, nullptr, true, true, dist_floor, true
+    );
+
+    ASSERT_EQ(actual.rows(), expected.rows());
+    ASSERT_EQ(actual.cols(), expected.cols());
+    EXPECT_LT((actual - expected).norm(), 1e-4f);
 }
 
 // ============================================================================
@@ -2360,6 +2692,91 @@ TEST(ColorUtils, GeneCompositionColorEmbeddingLowersThresholdWhenNeeded) {
         if (c != "#808080") saw_non_fallback = true;
     }
     EXPECT_TRUE(saw_non_fallback);
+}
+
+TEST(ColorUtils, GeneCompositionColorEmbeddingStreamingDoesNotCollapseToSingleColor) {
+    constexpr int groups = 3;
+    constexpr int per_group = 30;
+    constexpr int n = groups * per_group;
+
+    Eigen::MatrixXd pos(2, n);
+    std::vector<int> genes(n, 1);
+    std::vector<double> confidence(n, 0.99);
+
+    for (int g = 0; g < groups; ++g) {
+        for (int i = 0; i < per_group; ++i) {
+            const int idx = g * per_group + i;
+            pos(0, idx) = 50.0 * g + 0.25 * i;
+            pos(1, idx) = 10.0 * (i % 5);
+            genes[idx] = 1 + g;
+        }
+    }
+
+    auto colors = baysor::gene_composition_color_embedding_streaming(
+        pos, genes, /*n_genes=*/3, confidence,
+        /*k_neighbors=*/8,
+        /*basis_sample_size=*/60,
+        /*sample_size=*/30,
+        /*seed=*/1,
+        /*n_pca_dims=*/3
+    );
+
+    ASSERT_EQ(colors.size(), static_cast<size_t>(n));
+    std::set<std::string> unique(colors.begin(), colors.end());
+    EXPECT_GT(unique.size(), 1u);
+    for (const auto& c : colors) {
+        EXPECT_EQ(c.size(), 7u);
+        EXPECT_EQ(c[0], '#');
+    }
+}
+
+TEST(ColorUtils, GeneCompositionColorEmbeddingStreamingMatchesPrecomputedModel) {
+    constexpr int groups = 3;
+    constexpr int per_group = 24;
+    constexpr int n = groups * per_group;
+
+    Eigen::MatrixXd pos(2, n);
+    std::vector<int> genes(n, 1);
+    std::vector<double> confidence(n, 0.99);
+
+    for (int g = 0; g < groups; ++g) {
+        for (int i = 0; i < per_group; ++i) {
+            const int idx = g * per_group + i;
+            pos(0, idx) = 30.0 * g + 0.5 * i;
+            pos(1, idx) = 5.0 * (i % 6);
+            genes[idx] = 1 + g;
+        }
+    }
+
+    auto expected = baysor::gene_composition_color_embedding_streaming(
+        pos, genes, /*n_genes=*/3, confidence,
+        /*k_neighbors=*/8,
+        /*basis_sample_size=*/48,
+        /*sample_size=*/24,
+        /*seed=*/7,
+        /*n_pca_dims=*/3
+    );
+
+    auto model = baysor::fit_ncv_projected_model(
+        pos, genes, /*n_genes=*/3, confidence,
+        /*k_neighbors=*/8,
+        /*basis_sample_size=*/48,
+        /*n_components=*/20,
+        /*include_full_projection=*/true
+    );
+
+    auto actual = baysor::gene_composition_color_embedding_streaming(
+        pos, genes, /*n_genes=*/3, confidence,
+        /*k_neighbors=*/8,
+        /*basis_sample_size=*/48,
+        /*sample_size=*/24,
+        /*seed=*/7,
+        /*n_pca_dims=*/3,
+        /*graph_k=*/15,
+        &model
+    );
+
+    EXPECT_EQ(actual, expected);
 }
 
 // ============================================================================

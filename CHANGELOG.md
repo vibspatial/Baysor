@@ -2,7 +2,7 @@
 
 All notable changes to the C++ line of Baysor are documented here.
 
-## [Unreleased]
+## [cpp-0.8.1] — 2026-04-22
 
 ### Added
 
@@ -10,6 +10,11 @@ All notable changes to the C++ line of Baysor are documented here.
 - A documented Xenium workflow based on `experiment.xenium` input plus `xeniumranger import-segmentation`.
 - User-facing documentation pages for installation, CLI usage, inputs, outputs, preview, segfree, configuration, examples, and Xenium workflows.
 - A file-level output reference for the current output bundles.
+- Additional molecule clustering modes for `baysor run`:
+  - `mrf`
+  - `louvain`
+  - `leiden`
+  - `none`
 
 ### Changed
 
@@ -21,6 +26,10 @@ All notable changes to the C++ line of Baysor are documented here.
   - stream exact low-dimensional NCV vectors for all molecules
 - Default `n_cells_init` is now prior-aware when a prior segmentation is present.
 - `segmentation_counts.loom` writing now uses a row-oriented path instead of a late sparse-matrix duplication step.
+- For graph clustering methods, `n_clusters` now controls the final coarse cluster count after anchor communities are merged.
+- NCV-based clustering, 2D report UMAPs, and 3D NCV color UMAPs now share a consistent separation between:
+  - the spatial neighborhood used to compute NCVs
+  - the graph neighborhood used in NCV space
 
 ### Fixed
 
@@ -28,6 +37,8 @@ All notable changes to the C++ line of Baysor are documented here.
 - Reduced segmentation memory by switching persistent component gene counts away from dense `double` storage.
 - Reduced NCV memory by removing global all-molecule neighborhood materialization and the full all-molecule high-dimensional NCV matrix from the `run` and `preview` paths.
 - Reduced Loom write time and memory by avoiding an extra sparse-matrix conversion during output.
+- Fixed NCV color / report embedding consistency when `cluster_method=louvain` or `leiden`, so report UMAP geometry no longer depends on an unintended clustering-only NCV neighborhood.
+- Fixed streamed NCV projection to use the same logged feature transform as anchor NCV fitting, which restores non-collapsed NCV colors in `run` and `preview`.
 
 ## [0.8.0] — 2026-04-17
 

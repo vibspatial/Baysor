@@ -12,6 +12,50 @@
 
 namespace baysor {
 
+ClusterMethod parse_cluster_method(const std::string& method_raw) {
+    std::string method = strip(method_raw);
+    std::transform(method.begin(), method.end(), method.begin(), ::tolower);
+    if (method.empty() || method == "mrf" || method == "ica_mrf" || method == "ica-mrf" || method == "ica") {
+        return ClusterMethod::Mrf;
+    }
+    if (method == "none") {
+        return ClusterMethod::None;
+    }
+    if (method == "louvain") {
+        return ClusterMethod::Louvain;
+    }
+    if (method == "leiden") {
+        return ClusterMethod::Leiden;
+    }
+    throw std::runtime_error(
+        "cluster_method must be one of 'mrf', 'louvain', 'leiden', or 'none' "
+        "(legacy alias 'ica_mrf' is also accepted)"
+    );
+}
+
+std::string cluster_method_to_string(ClusterMethod method) {
+    switch (method) {
+        case ClusterMethod::None: return "none";
+        case ClusterMethod::Mrf: return "mrf";
+        case ClusterMethod::Louvain: return "louvain";
+        case ClusterMethod::Leiden: return "leiden";
+    }
+    return "mrf";
+}
+
+int default_cluster_count(ClusterMethod method) {
+    switch (method) {
+        case ClusterMethod::Louvain:
+        case ClusterMethod::Leiden:
+            return 10;
+        case ClusterMethod::None:
+            return 0;
+        case ClusterMethod::Mrf:
+        default:
+            return 4;
+    }
+}
+
 double parse_scale_std(const std::string& scale_std_raw, double scale) {
     std::string s = strip(scale_std_raw);
     if (s.empty()) return 0.25 * scale;
@@ -223,7 +267,18 @@ RunOptions load_config(const std::string& path) {
         auto& sec = doc["segmentation"];
         opts.segmentation.scale = toml_get_double(sec, "scale", opts.segmentation.scale);
         opts.segmentation.scale_std = toml_get(sec, "scale_std", opts.segmentation.scale_std);
+        opts.segmentation.cluster_method =
+            parse_cluster_method(toml_get(sec, "cluster_method",
+                                         cluster_method_to_string(opts.segmentation.cluster_method)));
         opts.segmentation.n_clusters = toml_get_int(sec, "n_clusters", opts.segmentation.n_clusters);
+        opts.segmentation.cluster_resolution = toml_get_double(
+            sec, "cluster_resolution", opts.segmentation.cluster_resolution);
+        opts.segmentation.cluster_graph_k = toml_get_int(
+            sec, "cluster_graph_k", opts.segmentation.cluster_graph_k);
+        opts.segmentation.cluster_n_dims = toml_get_int(
+            sec, "cluster_n_dims", opts.segmentation.cluster_n_dims);
+        opts.segmentation.cluster_basis_sample_size = toml_get_int(
+            sec, "cluster_basis_sample_size", opts.segmentation.cluster_basis_sample_size);
         opts.segmentation.prior_segmentation_confidence = toml_get_double(
             sec, "prior_segmentation_confidence", opts.segmentation.prior_segmentation_confidence);
         opts.segmentation.iters = toml_get_int(sec, "iters", opts.segmentation.iters);
@@ -236,6 +291,9 @@ RunOptions load_config(const std::string& path) {
             sec, "estimate_scale_from_centers", opts.prior.estimate_scale_from_prior);
         opts.prior.unassigned_label = toml_get(
             sec, "unassigned_prior_label", opts.prior.unassigned_label);
+    }
+    if (opts.segmentation.n_clusters <= 0) {
+        opts.segmentation.n_clusters = default_cluster_count(opts.segmentation.cluster_method);
     }
 
     // [prior]
@@ -325,7 +383,12 @@ void save_params_toml(const RunOptions& opts, const std::string& cli_cmd,
     f << "\n[segmentation]\n";
     f << "scale = " << opts.segmentation.scale << "\n";
     f << "scale_std = \"" << opts.segmentation.scale_std << "\"\n";
+    f << "cluster_method = \"" << cluster_method_to_string(opts.segmentation.cluster_method) << "\"\n";
     f << "n_clusters = " << opts.segmentation.n_clusters << "\n";
+    f << "cluster_resolution = " << opts.segmentation.cluster_resolution << "\n";
+    f << "cluster_graph_k = " << opts.segmentation.cluster_graph_k << "\n";
+    f << "cluster_n_dims = " << opts.segmentation.cluster_n_dims << "\n";
+    f << "cluster_basis_sample_size = " << opts.segmentation.cluster_basis_sample_size << "\n";
     f << "prior_segmentation_confidence = " << opts.segmentation.prior_segmentation_confidence << "\n";
     f << "iters = " << opts.segmentation.iters << "\n";
     f << "n_cells_init = " << opts.segmentation.n_cells_init << "\n";

@@ -1,12 +1,26 @@
 #pragma once
 
 #include <Eigen/Dense>
+#include <memory>
 #include <string>
 #include <vector>
 
 namespace baysor {
 
 class AdjList;
+
+struct NcvBasisModel {
+    std::vector<int> basis_ids;
+    int spatial_k = 0;
+    double distance_floor = -1.0;
+    Eigen::MatrixXf gene_emb_t;
+    Eigen::MatrixXf basis_vecs;
+};
+
+struct NcvProjectedModel {
+    NcvBasisModel basis;
+    Eigen::MatrixXf mol_vecs;
+};
 
 /// Normalize a 3 x N embedding to LAB color range.
 /// Matches Julia's normalize_embedding_to_lab_range!
@@ -33,7 +47,8 @@ std::vector<std::string> gene_composition_color_embedding(
     const std::vector<double>& confidence,
     int sample_size = 20000,
     int seed = 42,
-    int n_pca_dims = 10
+    int n_pca_dims = 10,
+    int graph_k = 15
 );
 
 /// Report-oriented NCV embedding diagnostics.
@@ -56,7 +71,29 @@ NcvReportEmbedding gene_composition_report_embedding(
     const std::vector<double>& confidence,
     int sample_size = 20000,
     int seed = 42,
-    int n_pca_dims = 10
+    int n_pca_dims = 10,
+    int graph_k = 15
+);
+
+NcvBasisModel fit_ncv_basis_model(
+    const Eigen::MatrixXd& pos_data,
+    const std::vector<int>& genes,
+    int n_genes,
+    const std::vector<double>& confidence,
+    int k_neighbors,
+    int basis_sample_size = 100000,
+    int n_components = 20
+);
+
+NcvProjectedModel fit_ncv_projected_model(
+    const Eigen::MatrixXd& pos_data,
+    const std::vector<int>& genes,
+    int n_genes,
+    const std::vector<double>& confidence,
+    int k_neighbors,
+    int basis_sample_size = 100000,
+    int n_components = 20,
+    bool include_full_projection = true
 );
 
 std::vector<std::string> gene_composition_color_embedding_streaming(
@@ -68,7 +105,9 @@ std::vector<std::string> gene_composition_color_embedding_streaming(
     int basis_sample_size = 100000,
     int sample_size = 20000,
     int seed = 42,
-    int n_pca_dims = 10
+    int n_pca_dims = 10,
+    int graph_k = 15,
+    const NcvProjectedModel* precomputed_model = nullptr
 );
 
 NcvReportEmbedding gene_composition_report_embedding_streaming(
@@ -80,7 +119,9 @@ NcvReportEmbedding gene_composition_report_embedding_streaming(
     int basis_sample_size = 100000,
     int sample_size = 20000,
     int seed = 42,
-    int n_pca_dims = 10
+    int n_pca_dims = 10,
+    int graph_k = 15,
+    const NcvProjectedModel* precomputed_model = nullptr
 );
 
 /// Pairwise gene spatial co-occurrence matrix from the molecule adjacency graph.

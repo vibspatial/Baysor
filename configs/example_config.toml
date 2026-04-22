@@ -15,7 +15,12 @@ scale = -1.0 # Negative values mean it must be estimated from `min_molecules_per
 scale_std = "25%" # Standard deviation of scale across cells. Can be either number, which means absolute value of the std, or string ended with "%" to set it relative to scale. Default: "25%"
 estimate_scale_from_centers = true # Use scale estimate from DAPI if provided. Default: true
 
-n_clusters = 4 # Number of clusters to use for cell type segmentation. Default: 4
+cluster_method = "mrf" # Molecule clustering prior. One of: mrf, louvain, leiden, none. Default: mrf
+n_clusters = 0 # Target number of coarse clusters. Exact for mrf; merged target for louvain/leiden. Default: 4 for mrf, 10 for louvain/leiden
+cluster_resolution = 1.0 # Advanced overclustering resolution for louvain/leiden. Default: 1.0
+cluster_graph_k = 15 # NCV neighbor count used for graph clustering and NCV UMAPs. Default: 15
+cluster_n_dims = 20 # Number of low-dimensional NCV coordinates used by louvain/leiden. Default: 20
+cluster_basis_sample_size = 100000 # Maximum number of basis anchors used by louvain/leiden. Default: 100000
 prior_segmentation_confidence = 0.2 # Confidence of the prior segmentation. Default: 0.2
 iters = 500 # Number of iterations for the cell segmentation algorithm. Default: 500
 n_cells_init = 0 # Initial number of cells
@@ -26,7 +31,7 @@ cyto_genes = "" # Comma-separated list of cytoplasm-specific genes. If provided,
 unassigned_prior_label = "0" # Label for unassigned cells in the prior segmentation. Default: "0"
 
 [plotting]
-gene_composition_neigborhood = 0 # Number of neighbors (i.e. 'k' in k-NN), which is used for gene composition visualization. Larger numbers leads to more global patterns. Default: estimate from min-molecules-per-cell
+gene_composition_neigborhood = 0 # Spatial neighborhood size used to compute NCVs. Larger values emphasize broader patterns. Default: max(n_genes / 10, min-molecules-per-cell, 3)
 min_pixels_per_cell = 15 # Number of pixels per cell of minimal size, used to estimate size of the final plot. For most protocols values around 7-30 give enough visualization quality. Default: 15
 max_plot_size = 3000 # Maximum size of the molecule plot in pixels. Default: 5000
 ncv_method = "ri" # Method for gene vector estimation for NCV dimensionality reduction. Possible values: `ri` (Random Indexing), `dense` (PCA), `sparse` (Sparse PCA). Default: ri

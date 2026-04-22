@@ -37,8 +37,13 @@ Common fields include:
 
 - `scale`
 - `scale_std`
+- `cluster_method`
 - `estimate_scale_from_centers`
 - `n_clusters`
+- `cluster_resolution`
+- `cluster_graph_k`
+- `cluster_n_dims`
+- `cluster_basis_sample_size`
 - `prior_segmentation_confidence`
 - `iters`
 - `n_cells_init`
@@ -52,6 +57,56 @@ Common fields include:
 - `min_pixels_per_cell`
 - `max_plot_size`
 - `ncv_method`
+
+## Clustering Options
+
+The segmentation pre-clustering step can be configured through
+`[segmentation]`.
+
+- `cluster_method = "mrf" | "louvain" | "leiden" | "none"`
+  - `mrf` is the legacy Baysor molecule clustering path and remains the default.
+  - `louvain` and `leiden` cluster basis anchors in NCV space, then transfer the
+    final labels back to all molecules.
+  - `none` disables the clustering prior entirely.
+- `n_clusters`
+  - for `mrf`, this is the exact number of molecule clusters used by the
+    clustering model
+  - for `louvain` and `leiden`, this is the target final number of coarse
+    clusters after anchor communities are merged
+  - if omitted or set to `0`, Baysor uses:
+    - `4` for `mrf`
+    - `10` for `louvain` and `leiden`
+- `cluster_resolution`
+  - advanced parameter for `louvain` and `leiden`
+  - controls the initial overclustering on the anchor graph before merging back
+    to `n_clusters`
+- `cluster_graph_k`
+  - number of nearest neighbors used in NCV space for:
+    - the Louvain/Leiden anchor graph
+    - 2D and 3D NCV UMAPs
+    - NCV interpolation
+  - the default is `15` and usually does not need to be changed
+- `cluster_n_dims`
+  - number of low-dimensional NCV coordinates used by graph clustering
+- `cluster_basis_sample_size`
+  - maximum number of basis anchors used by graph clustering and shared NCV
+    embedding
+
+## NCV Neighborhoods
+
+Two different neighborhood sizes matter for NCV-based reporting and
+graph clustering:
+
+- `gene_composition_neigborhood` / `gene_composition_neighborhood`
+  - spatial neighborhood size used to compute the NCV itself
+  - if not set, Baysor falls back to
+    `max(n_genes / 10, min_molecules_per_cell, 3)`
+- `cluster_graph_k`
+  - neighbor count in the low-dimensional NCV space, after the NCV has already
+    been computed
+
+Both spellings of `gene_composition_neigborhood` are accepted. The misspelled
+form is kept for compatibility with existing Julia-era configs.
 
 ## CLI vs Config
 

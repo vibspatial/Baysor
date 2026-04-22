@@ -69,6 +69,42 @@ This uses the `cell_id` column already present in the Xenium transcript table.
 This is the recommended full Xenium run if you intend to hand the result off to
 Xenium Ranger / Xenium Explorer later.
 
+### Alternative Clustering Priors
+
+By default, Baysor uses the legacy `mrf` clustering prior with `4` clusters.
+The recommended graph-based alternative is:
+
+- `louvain`
+
+Graph-based clustering uses NCV basis anchors and then transfers the final
+labels back to all molecules. For `louvain`, `--n-clusters` is the target final
+number of coarse clusters after anchor communities are merged.
+
+Examples:
+
+```bash
+../../build/baysor run \
+  -p \
+  -c ../../configs/xenium.toml \
+  -o ./tests/full_cellid_mrf \
+  ./data/experiment.xenium \
+  :cell_id
+```
+
+```bash
+../../build/baysor run \
+  -p \
+  --cluster-method louvain \
+  --n-clusters 10 \
+  -c ../../configs/xenium.toml \
+  -o ./tests/full_cellid_louvain_k10 \
+  ./data/experiment.xenium \
+  :cell_id
+```
+
+`-p` adds the HTML run report, which is useful for checking the NCV manifold,
+segmentation summary plots, and output bundle before exporting to Xenium Ranger.
+
 ### Full Run With Cell Boundary Priors
 
 This assigns molecules to prior segments by point-in-polygon against the Xenium

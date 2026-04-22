@@ -175,6 +175,141 @@ struct NcvSampleSelection {
     int anchor_count = 0;
 };
 
+struct LabNormalizationParams {
+    double l_min = 10.0;
+    double l_max = 90.0;
+    double trim_frac = 0.0125;
+    bool log_colors = false;
+    std::array<double, 3> row_q_lo{0.0, 0.0, 0.0};
+    double max_val = 1.0;
+    double q05 = 1e-3;
+    std::array<double, 3> log_row_min{0.0, 0.0, 0.0};
+    std::array<double, 3> log_row_scale{1.0, 1.0, 1.0};
+};
+
+struct NcvInterpolationModel {
+    Eigen::VectorXf sample_mean;
+    Eigen::MatrixXf pca_basis;
+    Eigen::MatrixXd anchor_pca;
+    Eigen::MatrixXd anchor_emb;
+    int interp_k = 5;
+};
+
+NcvSampleSelection select_ncv_sample_ids(
+    const Eigen::MatrixXf& mol_vecs,
+    const std::vector<double>& confidence,
+    int sample_size
+);
+
+LabNormalizationParams fit_lab_normalization_params(
+    const Eigen::MatrixXd& embedding,
+    double l_min,
+    double l_max,
+    double trim_frac,
+    bool log_colors
+);
+
+void apply_lab_normalization_params(
+    Eigen::MatrixXd& embedding,
+    const LabNormalizationParams& params
+);
+
+NcvInterpolationModel fit_ncv_interpolation_model(
+    const Eigen::MatrixXf& anchor_vecs,
+    const Eigen::MatrixXd& anchor_emb,
+    int n_pca_dims,
+    int graph_k
+);
+
+Eigen::MatrixXd interpolate_ncv_embedding(
+    const NcvInterpolationModel& model,
+    const Eigen::MatrixXf& query_vecs
+);
+
+static void fill_colors_from_projected_vectors(
+    NcvReportEmbedding& result,
+    const Eigen::MatrixXf& basis_vecs,
+    const std::vector<int>& basis_ids,
+    const std::vector<double>& basis_conf,
+    const Eigen::MatrixXf* all_mol_vecs,
+    const Eigen::MatrixXd& pos_data,
+    const std::vector<int>& genes,
+    const Eigen::MatrixXf& gene_emb_t,
+    int n_genes,
+    int k_neighbors,
+    double dist_floor,
+    int sample_size,
+    int seed,
+    int n_pca_dims,
+    int graph_k,
+    bool include_report_umap
+) {
+    NcvSampleSelection selection = select_ncv_sample_ids(basis_vecs, basis_conf, sample_size);
+    result.chosen_threshold = selection.chosen_threshold;
+    result.anchor_count = selection.anchor_count;
+    if (static_cast<int>(selection.sample_ids.size()) <= 1) {
+        spdlog::warn("NCV color embedding fallback: insufficient sampled anchors after basis selection.");
+        return;
+    }
+
+    const int n_sample = static_cast<int>(selection.sample_ids.size());
+    spdlog::info(
+        "NCV color embedding: selected {} anchors with confidence >= {:.2f}; sampling {} for UMAP fit.",
+        selection.anchor_count, selection.chosen_threshold, n_sample
+    );
+
+    Eigen::MatrixXf sample_vecs(basis_vecs.rows(), n_sample);
+    for (int i = 0; i < n_sample; ++i) sample_vecs.col(i) = basis_vecs.col(selection.sample_ids[i]);
+    Eigen::MatrixXd sample_vecs_d = sample_vecs.cast<double>();
+    Eigen::MatrixXd sample_emb = umap_embed(sample_vecs_d, 3, graph_k, 200, seed, 2.0);
+
+    if (include_report_umap) {
+        Eigen::MatrixXd sample_umap2d = umap_embed(sample_vecs_d, 2, graph_k, 200, seed, 2.0);
+        result.sample_ids.resize(n_sample);
+        result.sample_umap_x.resize(n_sample);
+        result.sample_umap_y.resize(n_sample);
+        for (int i = 0; i < n_sample; ++i) {
+            result.sample_ids[i] = basis_ids[selection.sample_ids[i]];
+            result.sample_umap_x[i] = sample_umap2d(0, i);
+            result.sample_umap_y[i] = sample_umap2d(1, i);
+        }
+    }
+
+    NcvInterpolationModel sample_model = fit_ncv_interpolation_model(
+        sample_vecs, sample_emb, n_pca_dims, graph_k
+    );
+    Eigen::MatrixXd basis_emb = interpolate_ncv_embedding(sample_model, basis_vecs);
+    LabNormalizationParams lab_params = fit_lab_normalization_params(basis_emb, 10.0, 90.0, 0.0125, false);
+
+    if (all_mol_vecs) {
+        constexpr int block_size = 32768;
+        for (int block_start = 0; block_start < all_mol_vecs->cols(); block_start += block_size) {
+            int block_n = std::min(block_size, static_cast<int>(all_mol_vecs->cols()) - block_start);
+            Eigen::MatrixXf block_vecs = all_mol_vecs->middleCols(block_start, block_n);
+            Eigen::MatrixXd block_emb = interpolate_ncv_embedding(sample_model, block_vecs);
+            apply_lab_normalization_params(block_emb, lab_params);
+            auto block_colors = embedding_to_hex(block_emb);
+            for (int i = 0; i < block_n; ++i) {
+                result.colors[static_cast<size_t>(block_start + i)] = block_colors[static_cast<size_t>(i)];
+            }
+        }
+        return;
+    }
+
+    stream_projected_neighborhood_vectors(
+        pos_data, genes, k_neighbors, gene_emb_t, n_genes, nullptr, nullptr,
+        true, true, dist_floor, true, 32768,
+        [&](int, const std::vector<int>& block_query_ids, const Eigen::MatrixXf& block_vecs) {
+            Eigen::MatrixXd block_emb = interpolate_ncv_embedding(sample_model, block_vecs);
+            apply_lab_normalization_params(block_emb, lab_params);
+            auto block_colors = embedding_to_hex(block_emb);
+            for (size_t i = 0; i < block_query_ids.size(); ++i) {
+                result.colors[block_query_ids[i]] = block_colors[i];
+            }
+        }
+    );
+}
+
 NcvSampleSelection select_ncv_sample_ids(
     const Eigen::MatrixXf& mol_vecs,
     const std::vector<double>& confidence,
@@ -232,6 +367,7 @@ NcvReportEmbedding compute_ncv_embedding(
     int sample_size,
     int seed,
     int n_pca_dims,
+    int graph_k,
     bool include_report_umap
 ) {
     const int n_components = static_cast<int>(mol_vecs.rows());
@@ -280,11 +416,11 @@ NcvReportEmbedding compute_ncv_embedding(
     // better colour separation than the umappp default of spread=1.0.
     Eigen::MatrixXd sample_mat_d = sample_mat.cast<double>();
     Eigen::MatrixXd sample_emb = umap_embed(sample_mat_d, 3,
-        /*n_neighbors=*/15, /*n_epochs=*/200, seed, /*spread=*/2.0);
+        /*n_neighbors=*/graph_k, /*n_epochs=*/200, seed, /*spread=*/2.0);
 
     if (include_report_umap) {
         Eigen::MatrixXd sample_umap2d = umap_embed(sample_mat_d, 2,
-            /*n_neighbors=*/15, /*n_epochs=*/200, seed, /*spread=*/2.0);
+            /*n_neighbors=*/graph_k, /*n_epochs=*/200, seed, /*spread=*/2.0);
         result.sample_umap_x.resize(sample_size);
         result.sample_umap_y.resize(sample_size);
         for (int i = 0; i < sample_size; ++i) {
@@ -318,7 +454,7 @@ NcvReportEmbedding compute_ncv_embedding(
 
     // KNN in PCA-3D space: nanoflann KD-tree via knn_parallel (already OMP-parallel).
     // tree = sample_pca (n_pca × sample_size), query = all_pca (n_pca × n_mols).
-    int k_interp = std::min(5, sample_size - 1);
+    int k_interp = std::min(graph_k, sample_size - 1);
     auto knn = knn_parallel(sample_pca.cast<double>(), all_pca, k_interp);
 
     // Weighted interpolation of UMAP coordinates.
@@ -341,18 +477,6 @@ NcvReportEmbedding compute_ncv_embedding(
     result.colors = embedding_to_hex(emb);
     return result;
 }
-
-struct LabNormalizationParams {
-    double l_min = 10.0;
-    double l_max = 90.0;
-    double trim_frac = 0.0125;
-    bool log_colors = false;
-    std::array<double, 3> row_q_lo{0.0, 0.0, 0.0};
-    double max_val = 1.0;
-    double q05 = 1e-3;
-    std::array<double, 3> log_row_min{0.0, 0.0, 0.0};
-    std::array<double, 3> log_row_scale{1.0, 1.0, 1.0};
-};
 
 LabNormalizationParams fit_lab_normalization_params(
     const Eigen::MatrixXd& embedding,
@@ -505,17 +629,11 @@ std::vector<int> select_basis_anchor_ids(
     return downsampled;
 }
 
-struct NcvInterpolationModel {
-    Eigen::VectorXf sample_mean;
-    Eigen::MatrixXf pca_basis;
-    Eigen::MatrixXd anchor_pca;
-    Eigen::MatrixXd anchor_emb;
-};
-
 NcvInterpolationModel fit_ncv_interpolation_model(
     const Eigen::MatrixXf& anchor_vecs,
     const Eigen::MatrixXd& anchor_emb,
-    int n_pca_dims
+    int n_pca_dims,
+    int graph_k
 ) {
     const int n_components = static_cast<int>(anchor_vecs.rows());
     const int n_anchors = static_cast<int>(anchor_vecs.cols());
@@ -527,6 +645,7 @@ NcvInterpolationModel fit_ncv_interpolation_model(
     model.pca_basis = svd.matrixU().leftCols(n_pca);
     model.anchor_pca = (model.pca_basis.transpose() * centered).cast<double>();
     model.anchor_emb = anchor_emb;
+    model.interp_k = std::max(1, graph_k);
     (void)n_anchors;
     return model;
 }
@@ -539,7 +658,7 @@ Eigen::MatrixXd interpolate_ncv_embedding(
     if (n_query == 0) return Eigen::MatrixXd(3, 0);
     Eigen::MatrixXd query_pca =
         (model.pca_basis.transpose() * (query_vecs.colwise() - model.sample_mean)).cast<double>();
-    int k_interp = std::min(5, static_cast<int>(model.anchor_pca.cols()) - 1);
+    int k_interp = std::min(model.interp_k, static_cast<int>(model.anchor_pca.cols()) - 1);
     if (k_interp < 1) k_interp = 1;
     auto knn = knn_parallel(model.anchor_pca, query_pca, k_interp);
     Eigen::MatrixXd emb(3, n_query);
@@ -568,77 +687,76 @@ NcvReportEmbedding compute_ncv_embedding_streaming(
     int sample_size,
     int seed,
     int n_pca_dims,
-    bool include_report_umap
+    int graph_k,
+    bool include_report_umap,
+    const NcvProjectedModel* precomputed_model
 ) {
     const int n_mols = static_cast<int>(genes.size());
     NcvReportEmbedding result;
     result.colors.assign(n_mols, NCV_FALLBACK_COLOR);
     if (n_mols == 0 || n_genes <= 0) return result;
 
-    std::vector<int> basis_ids = select_basis_anchor_ids(pos_data, confidence, basis_sample_size);
-    if (static_cast<int>(basis_ids.size()) <= 1) return result;
-    spdlog::info("NCV basis anchors: selected {} molecules for basis learning.", basis_ids.size());
-
-    double dist_floor = neighborhood_distance_floor(pos_data);
-    auto anchor_cm = neighborhood_count_matrix_subset(
-        pos_data, genes, basis_ids, k_neighbors, n_genes, nullptr, true, true, dist_floor
-    );
-    for (int k = 0; k < anchor_cm.outerSize(); ++k)
-        for (Eigen::SparseMatrix<float>::InnerIterator it(anchor_cm, k); it; ++it)
-            it.valueRef() = static_cast<float>(std::log(it.value() * 10000.0f + 1e-5f));
-
-    auto gene_emb_t = estimate_gene_vectors(anchor_cm, genes, 20, "ri", false);
-    auto basis_vecs = project_gene_vectors(gene_emb_t, anchor_cm);
-
-    std::vector<double> basis_conf(basis_ids.size());
-    for (size_t i = 0; i < basis_ids.size(); ++i) basis_conf[i] = confidence[basis_ids[i]];
-    NcvSampleSelection selection = select_ncv_sample_ids(basis_vecs, basis_conf, sample_size);
-    result.chosen_threshold = selection.chosen_threshold;
-    result.anchor_count = selection.anchor_count;
-    if (static_cast<int>(selection.sample_ids.size()) <= 1) {
-        spdlog::warn("NCV color embedding fallback: insufficient sampled anchors after basis selection.");
+    if (precomputed_model &&
+        precomputed_model->basis.spatial_k == k_neighbors &&
+        static_cast<int>(precomputed_model->basis.basis_ids.size()) > 1) {
+        std::vector<double> basis_conf(precomputed_model->basis.basis_ids.size());
+        for (size_t i = 0; i < precomputed_model->basis.basis_ids.size(); ++i) {
+            basis_conf[i] = confidence[precomputed_model->basis.basis_ids[i]];
+        }
+        fill_colors_from_projected_vectors(
+            result,
+            precomputed_model->basis.basis_vecs,
+            precomputed_model->basis.basis_ids,
+            basis_conf,
+            precomputed_model->mol_vecs.cols() == n_mols ? &precomputed_model->mol_vecs : nullptr,
+            pos_data,
+            genes,
+            precomputed_model->basis.gene_emb_t,
+            n_genes,
+            k_neighbors,
+            precomputed_model->basis.distance_floor,
+            sample_size,
+            seed,
+            n_pca_dims,
+            graph_k,
+            include_report_umap
+        );
         return result;
     }
-
-    const int n_sample = static_cast<int>(selection.sample_ids.size());
-    spdlog::info(
-        "NCV color embedding: selected {} anchors with confidence >= {:.2f}; sampling {} for UMAP fit.",
-        selection.anchor_count, selection.chosen_threshold, n_sample
-    );
-
-    Eigen::MatrixXf sample_vecs(basis_vecs.rows(), n_sample);
-    for (int i = 0; i < n_sample; ++i) sample_vecs.col(i) = basis_vecs.col(selection.sample_ids[i]);
-    Eigen::MatrixXd sample_vecs_d = sample_vecs.cast<double>();
-    Eigen::MatrixXd sample_emb = umap_embed(sample_vecs_d, 3, 15, 200, seed, 2.0);
-
-    if (include_report_umap) {
-        Eigen::MatrixXd sample_umap2d = umap_embed(sample_vecs_d, 2, 15, 200, seed, 2.0);
-        result.sample_ids.resize(n_sample);
-        result.sample_umap_x.resize(n_sample);
-        result.sample_umap_y.resize(n_sample);
-        for (int i = 0; i < n_sample; ++i) {
-            result.sample_ids[i] = basis_ids[selection.sample_ids[i]];
-            result.sample_umap_x[i] = sample_umap2d(0, i);
-            result.sample_umap_y[i] = sample_umap2d(1, i);
-        }
+    if (precomputed_model &&
+        precomputed_model->basis.spatial_k != k_neighbors &&
+        static_cast<int>(precomputed_model->basis.basis_ids.size()) > 1) {
+        spdlog::info(
+            "Ignoring precomputed NCV model because spatial neighborhood k differs "
+            "(model={}, requested={}).",
+            precomputed_model->basis.spatial_k, k_neighbors
+        );
     }
 
-    NcvInterpolationModel sample_model = fit_ncv_interpolation_model(sample_vecs, sample_emb, n_pca_dims);
-    Eigen::MatrixXd basis_emb = interpolate_ncv_embedding(sample_model, basis_vecs);
-    LabNormalizationParams lab_params = fit_lab_normalization_params(basis_emb);
-    NcvInterpolationModel basis_model = fit_ncv_interpolation_model(basis_vecs, basis_emb, n_pca_dims);
+    auto basis_model = fit_ncv_basis_model(
+        pos_data, genes, n_genes, confidence, k_neighbors, basis_sample_size, 20
+    );
+    if (static_cast<int>(basis_model.basis_ids.size()) <= 1) return result;
 
-    stream_projected_neighborhood_vectors(
-        pos_data, genes, k_neighbors, gene_emb_t, n_genes, nullptr, nullptr,
-        true, true, dist_floor, 32768,
-        [&](int, const std::vector<int>& block_query_ids, const Eigen::MatrixXf& block_vecs) {
-            Eigen::MatrixXd block_emb = interpolate_ncv_embedding(basis_model, block_vecs);
-            apply_lab_normalization_params(block_emb, lab_params);
-            auto block_colors = embedding_to_hex(block_emb);
-            for (size_t i = 0; i < block_query_ids.size(); ++i) {
-                result.colors[block_query_ids[i]] = block_colors[i];
-            }
-        }
+    std::vector<double> basis_conf(basis_model.basis_ids.size());
+    for (size_t i = 0; i < basis_model.basis_ids.size(); ++i) basis_conf[i] = confidence[basis_model.basis_ids[i]];
+    fill_colors_from_projected_vectors(
+        result,
+        basis_model.basis_vecs,
+        basis_model.basis_ids,
+        basis_conf,
+        nullptr,
+        pos_data,
+        genes,
+        basis_model.gene_emb_t,
+        n_genes,
+        k_neighbors,
+        basis_model.distance_floor,
+        sample_size,
+        seed,
+        n_pca_dims,
+        graph_k,
+        include_report_umap
     );
 
     return result;
@@ -651,9 +769,10 @@ std::vector<std::string> gene_composition_color_embedding(
     const std::vector<double>& confidence,
     int sample_size,
     int seed,
-    int n_pca_dims
+    int n_pca_dims,
+    int graph_k
 ) {
-    return compute_ncv_embedding(mol_vecs, confidence, sample_size, seed, n_pca_dims, false).colors;
+    return compute_ncv_embedding(mol_vecs, confidence, sample_size, seed, n_pca_dims, graph_k, false).colors;
 }
 
 NcvReportEmbedding gene_composition_report_embedding(
@@ -661,9 +780,63 @@ NcvReportEmbedding gene_composition_report_embedding(
     const std::vector<double>& confidence,
     int sample_size,
     int seed,
-    int n_pca_dims
+    int n_pca_dims,
+    int graph_k
 ) {
-    return compute_ncv_embedding(mol_vecs, confidence, sample_size, seed, n_pca_dims, true);
+    return compute_ncv_embedding(mol_vecs, confidence, sample_size, seed, n_pca_dims, graph_k, true);
+}
+
+NcvBasisModel fit_ncv_basis_model(
+    const Eigen::MatrixXd& pos_data,
+    const std::vector<int>& genes,
+    int n_genes,
+    const std::vector<double>& confidence,
+    int k_neighbors,
+    int basis_sample_size,
+    int n_components
+) {
+    NcvBasisModel model;
+    model.spatial_k = k_neighbors;
+    model.basis_ids = select_basis_anchor_ids(pos_data, confidence, basis_sample_size);
+    if (static_cast<int>(model.basis_ids.size()) <= 1) return model;
+
+    spdlog::info("NCV basis anchors: selected {} molecules for basis learning.", model.basis_ids.size());
+    model.distance_floor = neighborhood_distance_floor(pos_data);
+    auto anchor_cm = neighborhood_count_matrix_subset(
+        pos_data, genes, model.basis_ids, k_neighbors, n_genes, nullptr, true, true, model.distance_floor
+    );
+    for (int k = 0; k < anchor_cm.outerSize(); ++k) {
+        for (Eigen::SparseMatrix<float>::InnerIterator it(anchor_cm, k); it; ++it) {
+            it.valueRef() = static_cast<float>(std::log(it.value() * 10000.0f + 1e-5f));
+        }
+    }
+
+    model.gene_emb_t = estimate_gene_vectors(anchor_cm, genes, n_components, "ri", false);
+    model.basis_vecs = project_gene_vectors(model.gene_emb_t, anchor_cm);
+    return model;
+}
+
+NcvProjectedModel fit_ncv_projected_model(
+    const Eigen::MatrixXd& pos_data,
+    const std::vector<int>& genes,
+    int n_genes,
+    const std::vector<double>& confidence,
+    int k_neighbors,
+    int basis_sample_size,
+    int n_components,
+    bool include_full_projection
+) {
+    NcvProjectedModel model;
+    model.basis = fit_ncv_basis_model(
+        pos_data, genes, n_genes, confidence, k_neighbors, basis_sample_size, n_components
+    );
+    if (!include_full_projection || model.basis.gene_emb_t.cols() == 0) return model;
+
+    model.mol_vecs = project_neighborhood_vectors(
+        pos_data, genes, k_neighbors, model.basis.gene_emb_t, n_genes,
+        nullptr, nullptr, true, true, model.basis.distance_floor, true
+    );
+    return model;
 }
 
 std::vector<std::string> gene_composition_color_embedding_streaming(
@@ -675,11 +848,13 @@ std::vector<std::string> gene_composition_color_embedding_streaming(
     int basis_sample_size,
     int sample_size,
     int seed,
-    int n_pca_dims
+    int n_pca_dims,
+    int graph_k,
+    const NcvProjectedModel* precomputed_model
 ) {
     return compute_ncv_embedding_streaming(
         pos_data, genes, n_genes, confidence, k_neighbors,
-        basis_sample_size, sample_size, seed, n_pca_dims, false
+        basis_sample_size, sample_size, seed, n_pca_dims, graph_k, false, precomputed_model
     ).colors;
 }
 
@@ -692,11 +867,13 @@ NcvReportEmbedding gene_composition_report_embedding_streaming(
     int basis_sample_size,
     int sample_size,
     int seed,
-    int n_pca_dims
+    int n_pca_dims,
+    int graph_k,
+    const NcvProjectedModel* precomputed_model
 ) {
     return compute_ncv_embedding_streaming(
         pos_data, genes, n_genes, confidence, k_neighbors,
-        basis_sample_size, sample_size, seed, n_pca_dims, true
+        basis_sample_size, sample_size, seed, n_pca_dims, graph_k, true, precomputed_model
     );
 }
 

@@ -13,6 +13,13 @@ enum class PriorInputType {
     Boundary
 };
 
+enum class ClusterMethod {
+    None,
+    Mrf,
+    Louvain,
+    Leiden
+};
+
 struct MoleculeInputOptions {
     std::string x_col = "x";
     std::string y_col = "y";
@@ -45,7 +52,12 @@ struct PriorInputOptions {
 struct SegmentationOptions {
     double scale = -1.0;
     std::string scale_std = "25%";
-    int n_clusters = 4;
+    ClusterMethod cluster_method = ClusterMethod::Mrf;
+    int n_clusters = 0;
+    double cluster_resolution = 1.0;
+    int cluster_graph_k = 15;
+    int cluster_n_dims = 20;
+    int cluster_basis_sample_size = 100000;
     double prior_segmentation_confidence = 0.2;
     int iters = 500;
     double tol = 0.0;     ///< convergence tolerance for main BMM loop (0 = run all iters, matching Julia)
@@ -53,6 +65,10 @@ struct SegmentationOptions {
     std::string nuclei_genes;
     std::string cyto_genes;
 };
+
+ClusterMethod parse_cluster_method(const std::string& method);
+std::string cluster_method_to_string(ClusterMethod method);
+int default_cluster_count(ClusterMethod method);
 
 struct PlottingOptions {
     int gene_composition_neighborhood = 0;

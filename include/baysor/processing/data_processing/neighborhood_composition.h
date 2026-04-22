@@ -62,7 +62,8 @@ Eigen::MatrixXf project_neighborhood_vectors(
     const std::vector<double>* confidences = nullptr,
     bool normalize_by_dist = true,
     bool normalize = true,
-    double distance_floor = -1.0
+    double distance_floor = -1.0,
+    bool log_transform = false
 );
 
 void stream_projected_neighborhood_vectors(
@@ -76,6 +77,7 @@ void stream_projected_neighborhood_vectors(
     bool normalize_by_dist = true,
     bool normalize = true,
     double distance_floor = -1.0,
+    bool log_transform = false,
     int block_size = 32768,
     const std::function<void(int, const std::vector<int>&, const Eigen::MatrixXf&)>& callback = nullptr
 );
