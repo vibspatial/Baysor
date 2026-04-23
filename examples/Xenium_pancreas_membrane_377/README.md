@@ -264,19 +264,6 @@ is useful for testing and for very large datasets.
 
 Do not use cropped runs as the input to `xeniumranger import-segmentation`.
 
-## Visual QC Helper
-
-The repo also includes a Xenium visualization helper for rendering fixed example
-regions from a Baysor run:
-
-```bash
-.venv-vis/bin/python ../../scripts/visualize_xenium_examples.py \
-  -n 10 \
-  ./tests/full_cellid/segmentation.csv
-```
-
-This renders side-by-side Baysor / Xenium comparison panels using the Xenium
-morphology images as background when the required Python packages are available.
 
 ## Notes
 
