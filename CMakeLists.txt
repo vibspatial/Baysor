@@ -3,7 +3,17 @@ project(baysor VERSION 0.8.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
-set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
+# Keep default installs user-owned. Presets and explicit command-line values can
+# still override this with CMAKE_INSTALL_PREFIX or cmake --install --prefix.
+if(CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT)
+    set(CMAKE_INSTALL_PREFIX "${CMAKE_CURRENT_SOURCE_DIR}/install" CACHE PATH "Default Baysor install prefix." FORCE)
+endif()
+
+option(BAYSOR_EXPORT_COMPILE_COMMANDS "Export compile_commands.json for developer tooling" OFF)
+if(BAYSOR_EXPORT_COMPILE_COMMANDS)
+    set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+endif()
 include(GNUInstallDirs)
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")

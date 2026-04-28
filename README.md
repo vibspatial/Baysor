@@ -61,34 +61,57 @@ User-facing documentation for this branch:
 
 ### Dependencies
 
-Install CMake, Ninja, a C++17 toolchain, plus the libraries required by `find_package()` in [CMakeLists.txt](CMakeLists.txt):
+Install CMake, Ninja, a C++17 toolchain, plus the libraries required by
+`find_package()` in [CMakeLists.txt](CMakeLists.txt). Versions are kept
+intentionally broad for package-manager builds:
 
-- Eigen3
-- OpenMP
-- spdlog
-- CGAL
-- Arrow / Parquet
-- HDF5
-- nlohmann_json
-- libtiff
-- GTest for the optional test target
+| Dependency | Version note |
+| --- | --- |
+| CMake | `>= 3.20` |
+| C++ compiler | C++17 compiler; GCC 9.4.0 and Visual Studio 2022 are known to work |
+| Ninja | Recent Ninja; 1.10.0 is known to work |
+| Eigen3 | `>= 3.3` |
+| OpenMP | C++ OpenMP target; GCC OpenMP 4.5 is known to work |
+| spdlog | Not pinned; 1.5.0 is known to work |
+| CGAL | Not pinned; 5.0.2 is known to work |
+| Arrow / Parquet | Not pinned; 19.0.1 is known to work; Arrow must include compute, CSV, and Parquet support |
+| HDF5 | Not pinned; 1.10.x is known to work |
+| nlohmann_json | Not pinned; 3.7.3 is known to work |
+| libtiff | Not pinned; 4.1.0 is known to work |
+| GTest | Optional tests only; 1.10.0 is known to work |
 
-Several header-only dependencies are fetched automatically by CMake.
+Several header-only dependencies are fetched automatically by CMake with pinned
+tags: `aarand v1.0.2`, `CppKmeans v3.1.1`, `subpar v0.3.1`,
+`knncolle v2.3.0`, `CppIrlba v2.0.2`, and `umappp v2.0.1`.
 
-### Configure and build
+### Configure, build, and install
+
+After dependencies are installed, the standard CMake commands are:
 
 ```bash
-cmake --preset release
-cmake --build --preset release
+cmake -S . -B build
+cmake --build build
+cmake --install build
 ```
 
-For a user-space dependency install through vcpkg:
+This configures an end-user build: optimized, tests off, and installed to
+`./install/bin`.
+
+The same system-package build can be run as one command:
+
+```bash
+cmake -P cmake/build_and_install.cmake
+```
+
+For a user-space dependency install through vcpkg, set `VCPKG_ROOT` first:
 
 ```bash
 export VCPKG_ROOT="$HOME/.local/src/vcpkg"
-cmake --preset vcpkg-release
-cmake --build --preset vcpkg-release
+cmake -P cmake/build_and_install.cmake
 ```
+
+If `VCPKG_ROOT` is set, the helper uses vcpkg. Otherwise it uses system
+packages visible to CMake.
 
 ### Run tests
 

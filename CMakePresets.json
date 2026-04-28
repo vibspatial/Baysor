@@ -7,11 +7,11 @@
   },
   "configurePresets": [
     {
-      "name": "release",
-      "displayName": "Release",
-      "description": "Release build using dependencies already visible to CMake.",
+      "name": "user",
+      "displayName": "User Build",
+      "description": "End-user build using dependencies already visible to CMake. Optimized, tests off, installs to ./install.",
       "generator": "Ninja",
-      "binaryDir": "${sourceDir}/build/release",
+      "binaryDir": "${sourceDir}/build/user",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Release",
         "CMAKE_INSTALL_PREFIX": "${sourceDir}/install",
@@ -20,20 +20,20 @@
     },
     {
       "name": "tests",
-      "displayName": "Release With Tests",
-      "description": "Release build with the optional GTest-based test target.",
-      "inherits": "release",
+      "displayName": "User Build With Tests",
+      "description": "End-user build with the optional GTest-based test target.",
+      "inherits": "user",
       "binaryDir": "${sourceDir}/build/tests",
       "cacheVariables": {
         "BAYSOR_WITH_TESTS": "ON"
       }
     },
     {
-      "name": "vcpkg-release",
-      "displayName": "Release With vcpkg",
-      "description": "User-space dependency install through vcpkg manifest mode.",
-      "inherits": "release",
-      "binaryDir": "${sourceDir}/build/vcpkg-release",
+      "name": "user-vcpkg",
+      "displayName": "User Build With vcpkg",
+      "description": "End-user build with dependencies installed in user space through vcpkg manifest mode.",
+      "inherits": "user",
+      "binaryDir": "${sourceDir}/build/user-vcpkg",
       "cacheVariables": {
         "CMAKE_TOOLCHAIN_FILE": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
         "VCPKG_INSTALLED_DIR": "${sourceDir}/vcpkg_installed"
@@ -41,9 +41,9 @@
     },
     {
       "name": "vcpkg-tests",
-      "displayName": "Release With vcpkg And Tests",
+      "displayName": "User Build With vcpkg And Tests",
       "description": "User-space dependency install through vcpkg, including GTest.",
-      "inherits": "vcpkg-release",
+      "inherits": "user-vcpkg",
       "binaryDir": "${sourceDir}/build/vcpkg-tests",
       "cacheVariables": {
         "BAYSOR_WITH_TESTS": "ON",
@@ -53,8 +53,8 @@
   ],
   "buildPresets": [
     {
-      "name": "release",
-      "configurePreset": "release",
+      "name": "user",
+      "configurePreset": "user",
       "targets": [
         "baysor"
       ]
@@ -68,8 +68,8 @@
       ]
     },
     {
-      "name": "vcpkg-release",
-      "configurePreset": "vcpkg-release",
+      "name": "user-vcpkg",
+      "configurePreset": "user-vcpkg",
       "targets": [
         "baysor"
       ]

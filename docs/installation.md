@@ -5,19 +5,37 @@ with `-DBAYSOR_WITH_TESTS=ON` or the `tests` / `vcpkg-tests` presets.
 
 ## Required Dependencies
 
-Baysor needs CMake, Ninja, a C++17 toolchain, plus:
+Baysor needs CMake, Ninja, a C++17 toolchain, plus the C++ libraries below.
+Only CMake, the C++ standard, and Eigen have explicit minimums in the build.
+Other libraries are intentionally not pinned so that system package managers,
+Homebrew, and vcpkg can provide compatible versions.
 
-- Eigen3
-- OpenMP
-- spdlog
-- CGAL
-- Arrow / Parquet
-- HDF5
-- nlohmann_json
-- libtiff
-- GTest only when `BAYSOR_WITH_TESTS=ON`
+| Dependency | Required / known-working version |
+| --- | --- |
+| CMake | `>= 3.20` |
+| C++ compiler | C++17 compiler; GCC 9.4.0 and Visual Studio 2022 are known to work |
+| Ninja | Recent Ninja; 1.10.0 is known to work |
+| Eigen3 | `>= 3.3` |
+| OpenMP | C++ OpenMP target; GCC OpenMP 4.5 is known to work |
+| spdlog | Not pinned; 1.5.0 is known to work |
+| CGAL | Not pinned; 5.0.2 is known to work |
+| Arrow / Parquet | Not pinned; 19.0.1 is known to work; Arrow must include compute, CSV, and Parquet support |
+| HDF5 | Not pinned; 1.10.x is known to work |
+| nlohmann_json | Not pinned; 3.7.3 is known to work |
+| libtiff | Not pinned; 4.1.0 is known to work |
+| GTest | Optional, only when `BAYSOR_WITH_TESTS=ON`; 1.10.0 is known to work |
 
-Several header-only UMAP dependencies are fetched automatically by CMake.
+Several header-only UMAP dependencies are fetched automatically by CMake with
+pinned source tags:
+
+| Header-only dependency | Pinned tag |
+| --- | --- |
+| `aarand` | `v1.0.2` |
+| `CppKmeans` | `v3.1.1` |
+| `subpar` | `v0.3.1` |
+| `knncolle` | `v2.3.0` |
+| `CppIrlba` | `v2.0.2` |
+| `umappp` | `v2.0.1` |
 
 ## User-Space Build With vcpkg
 
@@ -41,17 +59,21 @@ git clone https://github.com/microsoft/vcpkg "$env:USERPROFILE\vcpkg"
 $env:VCPKG_ROOT = "$env:USERPROFILE\vcpkg"
 ```
 
-Configure and build:
+Then build and install with the same command on Linux, macOS, and Windows:
 
 ```bash
-cmake --preset vcpkg-release
-cmake --build --preset vcpkg-release
+cmake -P cmake/build_and_install.cmake
 ```
 
-Install the binary to a user-owned prefix:
+This installs `baysor` to `./install/bin` by default. The default build is
+optimized, leaves tests off, and does not require writing to system directories.
+
+The equivalent manual commands are:
 
 ```bash
-cmake --install build/vcpkg-release --prefix "$HOME/.local"
+cmake --preset user-vcpkg
+cmake --build --preset user-vcpkg
+cmake --install build/user-vcpkg
 ```
 
 On macOS, install the OpenMP runtime first:
@@ -62,23 +84,31 @@ brew install libomp
 
 ## System Package Builds
 
-If dependencies are already installed in standard locations:
+If dependencies are already installed in standard locations, use standard CMake:
 
 ```bash
-cmake --preset release
-cmake --build --preset release
+cmake -S . -B build
+cmake --build build
+cmake --install build
+```
+
+Or use the helper script:
+
+```bash
+cmake -P cmake/build_and_install.cmake
 ```
 
 For a custom user-owned prefix, point CMake at it:
 
 ```bash
-cmake -S . -B build/release \
+cmake -S . -B build/user \
+  -G Ninja \
   -DCMAKE_BUILD_TYPE=Release \
   -DBAYSOR_WITH_TESTS=OFF \
   -DCMAKE_PREFIX_PATH="$HOME/.local" \
   -DCMAKE_INSTALL_PREFIX="$HOME/.local"
-cmake --build build/release --target baysor -j"$(nproc)"
-cmake --install build/release
+cmake --build build/user --target baysor
+cmake --install build/user
 ```
 
 ## Ubuntu 24.04
@@ -115,8 +145,7 @@ sudo apt-get install -y --no-install-recommends \
   nlohmann-json3-dev \
   libtiff-dev
 
-cmake --preset release
-cmake --build --preset release
+cmake -P cmake/build_and_install.cmake
 ```
 
 ## macOS
@@ -135,8 +164,7 @@ brew install \
   nlohmann-json \
   libtiff
 
-cmake --preset release
-cmake --build --preset release
+cmake -P cmake/build_and_install.cmake
 ```
 
 ## Windows
@@ -144,17 +172,13 @@ cmake --build --preset release
 Use Visual Studio 2022 or newer and the vcpkg manifest:
 
 ```powershell
-cmake -S . -B build\windows -G "Visual Studio 17 2022" -A x64 `
-  -DBAYSOR_WITH_TESTS=OFF `
-  -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_ROOT\scripts\buildsystems\vcpkg.cmake" `
-  -DVCPKG_TARGET_TRIPLET=x64-windows
-cmake --build build\windows --config Release --target baysor --parallel
+cmake -P cmake/build_and_install.cmake
 ```
 
 The binary will be under:
 
 ```text
-build/windows/Release/baysor.exe
+install/bin/baysor.exe
 ```
 
 ## Tests
