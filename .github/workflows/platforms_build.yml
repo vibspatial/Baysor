@@ -93,9 +93,7 @@ jobs:
         run: |
           cmake -S . -B build/ci -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
-            -DBAYSOR_WITH_TESTS=OFF \
-            -DOpenMP_ROOT="$(brew --prefix libomp)" \
-            -DCMAKE_PREFIX_PATH="$(brew --prefix);$(brew --prefix apache-arrow);$(brew --prefix hdf5);$(brew --prefix libomp)"
+            -DBAYSOR_WITH_TESTS=OFF
 
       - name: Configure Windows
         if: runner.os == 'Windows'

@@ -78,7 +78,6 @@ intentionally broad for package-manager builds:
 | HDF5 | Not pinned; 1.10.x is known to work |
 | nlohmann_json | Not pinned; 3.7.3 is known to work |
 | libtiff | Not pinned; 4.1.0 is known to work |
-| GTest | Optional tests only; 1.10.0 is known to work |
 
 Several header-only dependencies are fetched automatically by CMake with pinned
 tags: `aarand v1.0.2`, `CppKmeans v3.1.1`, `subpar v0.3.1`,
@@ -95,19 +94,16 @@ cmake -P cmake/build_and_install.cmake
 
 This configures an end-user build: optimized, tests off, and installed to
 `./install/bin`. Platform-specific prerequisite commands are in
-[docs/installation.md](docs/installation.md).
+[docs/installation.md](docs/installation.md). Windows uses vcpkg when
+`VCPKG_ROOT` is set; Linux and macOS use system packages by default.
 
-### Run tests
-
-Tests are not built by default. To enable them:
+Run the installed binary with:
 
 ```bash
-cmake --preset tests
-cmake --build --preset tests
-ctest --preset tests
+./install/bin/baysor --help
 ```
 
-Detailed platform-specific installation instructions are in [docs/installation.md](docs/installation.md).
+Detailed installation instructions are in [docs/installation.md](docs/installation.md).
 
 ## Citation
 

@@ -16,6 +16,23 @@ if(BAYSOR_EXPORT_COMPILE_COMMANDS)
 endif()
 include(GNUInstallDirs)
 
+if(APPLE)
+    foreach(_homebrew_prefix /opt/homebrew /usr/local)
+        if(EXISTS "${_homebrew_prefix}")
+            list(APPEND CMAKE_PREFIX_PATH "${_homebrew_prefix}")
+        endif()
+    endforeach()
+
+    if(NOT DEFINED OpenMP_ROOT)
+        foreach(_libomp_prefix /opt/homebrew/opt/libomp /usr/local/opt/libomp)
+            if(EXISTS "${_libomp_prefix}")
+                set(OpenMP_ROOT "${_libomp_prefix}" CACHE PATH "Homebrew libomp prefix")
+                break()
+            endif()
+        endforeach()
+    endif()
+endif()
+
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 include(BaysorDependencies)
 
@@ -110,6 +127,7 @@ target_link_libraries(umappp INTERFACE ltla::aarand ltla::irlba knncolle::knncol
 
 # Patch irlba v2.0.2 bug: Eigen::VectorXd has no begin()/end().
 # Replace std::max_element(BS.begin(), BS.end()) with BS.maxCoeff().
+FetchContent_GetProperties(irlba)
 set(_irlba_compute "${irlba_SOURCE_DIR}/include/irlba/compute.hpp")
 if(EXISTS "${_irlba_compute}")
     file(READ "${_irlba_compute}" _irlba_content)

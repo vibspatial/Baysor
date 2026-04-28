@@ -1,7 +1,7 @@
 # Installation
 
-The C++ branch is built with CMake. Tests are not built by default; enable them
-with `-DBAYSOR_WITH_TESTS=ON` or the `tests` / `vcpkg-tests` presets.
+The C++ branch is built with CMake. The default build is optimized, installs
+under this checkout, and does not build tests.
 
 ## Required Dependencies
 
@@ -23,7 +23,6 @@ Homebrew, and vcpkg can provide compatible versions.
 | HDF5 | Not pinned; 1.10.x is known to work |
 | nlohmann_json | Not pinned; 3.7.3 is known to work |
 | libtiff | Not pinned; 4.1.0 is known to work |
-| GTest | Optional, only when `BAYSOR_WITH_TESTS=ON`; 1.10.0 is known to work |
 
 Several header-only UMAP dependencies are fetched automatically by CMake with
 pinned source tags:
@@ -47,9 +46,15 @@ cmake -P cmake/build_and_install.cmake
 ```
 
 This installs `baysor` to `./install/bin` by default. The build is optimized,
-leaves tests off, and does not write to system directories. If `VCPKG_ROOT` is
-set, the helper uses the vcpkg manifest; otherwise it uses system packages
-visible to CMake.
+leaves tests off, and does not write to system directories. Linux and macOS use
+system packages by default. Windows uses the vcpkg manifest when `VCPKG_ROOT`
+is set.
+
+After installation, run:
+
+```bash
+./install/bin/baysor --help
+```
 
 ## Ubuntu 24.04
 
@@ -106,7 +111,8 @@ brew install \
 ## Windows
 
 Install Visual Studio 2022 or newer with the C++ workload, CMake, Git, and
-vcpkg. Then set `VCPKG_ROOT` to the vcpkg checkout:
+vcpkg. Set `VCPKG_ROOT` to the vcpkg checkout before running the common build
+command:
 
 ```powershell
 git clone https://github.com/microsoft/vcpkg "$env:USERPROFILE\vcpkg"
@@ -118,24 +124,6 @@ After running the common build command, the binary will be under:
 
 ```text
 install/bin/baysor.exe
-```
-
-## Tests
-
-System-package build with tests:
-
-```bash
-cmake --preset tests
-cmake --build --preset tests
-ctest --preset tests
-```
-
-User-space vcpkg build with tests:
-
-```bash
-cmake --preset vcpkg-tests
-cmake --build --preset vcpkg-tests
-ctest --preset vcpkg-tests
 ```
 
 ## Troubleshooting Dependencies
@@ -159,5 +147,4 @@ cmake -S . -B build -DArrow_DIR=/path/to/lib/cmake/arrow
 The `platforms_build` workflow builds the `baysor` target on Ubuntu, macOS, and
 Windows. Ubuntu and macOS use native binary packages so CI does not spend time
 building Apache Arrow and Thrift from source; Windows uses the vcpkg manifest.
-A separate Ubuntu job enables `BAYSOR_WITH_TESTS=ON`, builds `baysor_tests`, and
-runs `ctest`.
+A separate Ubuntu job builds and runs the developer tests.

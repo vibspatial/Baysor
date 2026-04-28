@@ -15,7 +15,16 @@ function(baysor_find_package package_name)
 
     find_package(${package_name} ${_find_args})
 
-    if(NOT DEFINED ${package_name}_FOUND OR NOT ${${package_name}_FOUND})
+    set(_found FALSE)
+    if(DEFINED ${package_name}_FOUND AND ${${package_name}_FOUND})
+        set(_found TRUE)
+    elseif(package_name STREQUAL "Eigen3" AND DEFINED EIGEN3_FOUND AND EIGEN3_FOUND)
+        set(_found TRUE)
+    elseif(BAYSOR_DEP_TARGET AND TARGET "${BAYSOR_DEP_TARGET}")
+        set(_found TRUE)
+    endif()
+
+    if(NOT _found)
         message(FATAL_ERROR
             "Required dependency '${package_name}' was not found.\n"
             "Install it with your system package manager, or use the vcpkg preset documented in docs/installation.md.\n"
@@ -39,6 +48,9 @@ function(baysor_find_package package_name)
         ${package_name}_VERSION
         ${package_name}_VERSION_STRING
         ${package_name}_VERSION_MAJOR)
+    if(package_name STREQUAL "Eigen3")
+        list(APPEND _version_vars EIGEN3_VERSION_STRING EIGEN3_VERSION)
+    endif()
     if(package_name STREQUAL "OpenMP")
         list(APPEND _version_vars OpenMP_CXX_VERSION)
     endif()

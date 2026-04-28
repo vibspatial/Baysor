@@ -3,7 +3,7 @@ cmake_minimum_required(VERSION 3.20)
 get_filename_component(_source_dir "${CMAKE_CURRENT_LIST_DIR}/.." ABSOLUTE)
 
 if(NOT DEFINED BAYSOR_PRESET OR BAYSOR_PRESET STREQUAL "")
-    if(DEFINED ENV{VCPKG_ROOT} AND NOT "$ENV{VCPKG_ROOT}" STREQUAL "")
+    if(WIN32 AND DEFINED ENV{VCPKG_ROOT} AND NOT "$ENV{VCPKG_ROOT}" STREQUAL "")
         set(BAYSOR_PRESET "user-vcpkg")
     else()
         set(BAYSOR_PRESET "user")
@@ -12,12 +12,20 @@ endif()
 
 if(BAYSOR_PRESET STREQUAL "user")
     set(_build_dir "${_source_dir}/build/user")
+    set(_with_tests OFF)
+    set(_with_vcpkg OFF)
 elseif(BAYSOR_PRESET STREQUAL "user-vcpkg")
     set(_build_dir "${_source_dir}/build/user-vcpkg")
+    set(_with_tests OFF)
+    set(_with_vcpkg ON)
 elseif(BAYSOR_PRESET STREQUAL "tests")
     set(_build_dir "${_source_dir}/build/tests")
+    set(_with_tests ON)
+    set(_with_vcpkg OFF)
 elseif(BAYSOR_PRESET STREQUAL "vcpkg-tests")
     set(_build_dir "${_source_dir}/build/vcpkg-tests")
+    set(_with_tests ON)
+    set(_with_vcpkg ON)
 else()
     message(FATAL_ERROR
         "Unknown BAYSOR_PRESET='${BAYSOR_PRESET}'. Supported values are: "
@@ -25,7 +33,7 @@ else()
     )
 endif()
 
-if(BAYSOR_PRESET MATCHES "^vcpkg" AND (NOT DEFINED ENV{VCPKG_ROOT} OR "$ENV{VCPKG_ROOT}" STREQUAL ""))
+if(BAYSOR_PRESET MATCHES "vcpkg" AND (NOT DEFINED ENV{VCPKG_ROOT} OR "$ENV{VCPKG_ROOT}" STREQUAL ""))
     message(FATAL_ERROR
         "BAYSOR_PRESET='${BAYSOR_PRESET}' requires VCPKG_ROOT to point to a "
         "bootstrapped vcpkg checkout."
@@ -33,7 +41,8 @@ if(BAYSOR_PRESET MATCHES "^vcpkg" AND (NOT DEFINED ENV{VCPKG_ROOT} OR "$ENV{VCPK
 endif()
 
 function(_baysor_run)
-    message(STATUS "Running: ${ARGV}")
+    string(REPLACE ";" " " _command_text "${ARGV}")
+    message(STATUS "Running: ${_command_text}")
     execute_process(
         COMMAND ${ARGV}
         WORKING_DIRECTORY "${_source_dir}"
@@ -44,8 +53,32 @@ function(_baysor_run)
     endif()
 endfunction()
 
-_baysor_run("${CMAKE_COMMAND}" --preset "${BAYSOR_PRESET}")
-_baysor_run("${CMAKE_COMMAND}" --build --preset "${BAYSOR_PRESET}")
+set(_configure_args
+    -S "${_source_dir}"
+    -B "${_build_dir}"
+    -G Ninja
+    -DCMAKE_BUILD_TYPE=Release
+    -DCMAKE_INSTALL_PREFIX=${_source_dir}/install
+    -DBAYSOR_WITH_TESTS=${_with_tests}
+)
+
+if(_with_vcpkg)
+    list(APPEND _configure_args
+        -DCMAKE_TOOLCHAIN_FILE=$ENV{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake
+        -DVCPKG_INSTALLED_DIR=${_source_dir}/vcpkg_installed
+    )
+    if(_with_tests)
+        list(APPEND _configure_args -DVCPKG_MANIFEST_FEATURES=tests)
+    endif()
+endif()
+
+set(_build_targets baysor)
+if(_with_tests)
+    list(APPEND _build_targets baysor_tests)
+endif()
+
+_baysor_run("${CMAKE_COMMAND}" ${_configure_args})
+_baysor_run("${CMAKE_COMMAND}" --build "${_build_dir}" --target ${_build_targets})
 
 if(DEFINED BAYSOR_INSTALL_PREFIX AND NOT BAYSOR_INSTALL_PREFIX STREQUAL "")
     get_filename_component(_install_prefix "${BAYSOR_INSTALL_PREFIX}" ABSOLUTE BASE_DIR "${_source_dir}")
