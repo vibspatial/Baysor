@@ -15,6 +15,48 @@ function(baysor_find_package package_name)
 
     find_package(${package_name} ${_find_args})
 
+    if(package_name STREQUAL "Eigen3" AND BAYSOR_DEP_TARGET AND NOT TARGET "${BAYSOR_DEP_TARGET}")
+        set(_eigen_hints)
+        foreach(_prefix IN LISTS CMAKE_PREFIX_PATH)
+            list(APPEND _eigen_hints
+                "${_prefix}"
+                "${_prefix}/include"
+                "${_prefix}/include/eigen3"
+            )
+        endforeach()
+        if(DEFINED VCPKG_INSTALLED_DIR AND DEFINED VCPKG_TARGET_TRIPLET)
+            list(APPEND _eigen_hints
+                "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}"
+                "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/include"
+                "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/include/eigen3"
+            )
+        endif()
+        list(APPEND _eigen_hints
+            /opt/homebrew
+            /opt/homebrew/include
+            /opt/homebrew/include/eigen3
+            /usr/local
+            /usr/local/include
+            /usr/local/include/eigen3
+            /usr
+            /usr/include
+            /usr/include/eigen3
+        )
+
+        find_path(EIGEN3_INCLUDE_DIR
+            NAMES Eigen/Core
+            HINTS ${_eigen_hints}
+            PATH_SUFFIXES eigen3 include/eigen3
+        )
+        if(EIGEN3_INCLUDE_DIR)
+            add_library("${BAYSOR_DEP_TARGET}" INTERFACE IMPORTED)
+            target_include_directories("${BAYSOR_DEP_TARGET}" INTERFACE "${EIGEN3_INCLUDE_DIR}")
+            set(EIGEN3_FOUND TRUE)
+            set(EIGEN3_VERSION_STRING "unknown")
+            message(STATUS "Found Eigen3 headers: ${EIGEN3_INCLUDE_DIR}")
+        endif()
+    endif()
+
     set(_found FALSE)
     if(DEFINED ${package_name}_FOUND AND ${${package_name}_FOUND})
         set(_found TRUE)
