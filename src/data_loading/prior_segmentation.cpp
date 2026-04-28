@@ -246,6 +246,13 @@ PriorInputOptions parse_prior_input_spec(const std::string& prior_seg_arg) {
     return opts;
 }
 
+void apply_prior_input_spec(PriorInputOptions& opts, const std::string& prior_seg_arg) {
+    auto parsed = parse_prior_input_spec(prior_seg_arg);
+    opts.type = parsed.type;
+    opts.path = parsed.path;
+    opts.column_name = parsed.column_name;
+}
+
 // ============================================================================
 // Filter segmentation labels
 // ============================================================================

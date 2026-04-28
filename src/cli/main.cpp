@@ -960,7 +960,7 @@ int main(int argc, char* argv[]) {
                 }
             }
             if (!run_prior_seg.empty()) {
-                opts.prior = parse_prior_input_spec(run_prior_seg);
+                apply_prior_input_spec(opts.prior, run_prior_seg);
             }
             if (opts.segmentation.scale > 0) {
                 opts.prior.estimate_scale_from_prior = false;

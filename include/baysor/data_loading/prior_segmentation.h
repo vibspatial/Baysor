@@ -10,6 +10,9 @@ namespace baysor {
 /// Detect prior segmentation type from the input string
 PriorInputType detect_prior_seg_type(const std::string& prior_seg_arg);
 PriorInputOptions parse_prior_input_spec(const std::string& prior_seg_arg);
+/// Apply a positional prior segmentation argument while preserving prior
+/// interpretation options loaded from config or CLI flags.
+void apply_prior_input_spec(PriorInputOptions& opts, const std::string& prior_seg_arg);
 
 /// Parse prior segmentation from a column in the molecule file.
 /// The column values are strings or ints; unassigned_label marks unassigned molecules.

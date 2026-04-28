@@ -960,6 +960,31 @@ TEST(PriorSegmentation, DetectType) {
     EXPECT_EQ(baysor::detect_prior_seg_type("/path/to/boundaries.parquet"), baysor::PriorInputType::Boundary);
 }
 
+TEST(PriorSegmentation, ApplyInputSpecPreservesInterpretationOptions) {
+    baysor::PriorInputOptions prior;
+    prior.unassigned_label = "UNASSIGNED";
+    prior.min_molecules_per_segment = 12;
+    prior.estimate_scale_from_prior = false;
+
+    baysor::apply_prior_input_spec(prior, ":cell_id");
+
+    EXPECT_EQ(prior.type, baysor::PriorInputType::Column);
+    EXPECT_EQ(prior.column_name, "cell_id");
+    EXPECT_TRUE(prior.path.empty());
+    EXPECT_EQ(prior.unassigned_label, "UNASSIGNED");
+    EXPECT_EQ(prior.min_molecules_per_segment, 12);
+    EXPECT_FALSE(prior.estimate_scale_from_prior);
+
+    baysor::apply_prior_input_spec(prior, "/path/to/boundaries.parquet");
+
+    EXPECT_EQ(prior.type, baysor::PriorInputType::Boundary);
+    EXPECT_EQ(prior.path, "/path/to/boundaries.parquet");
+    EXPECT_TRUE(prior.column_name.empty());
+    EXPECT_EQ(prior.unassigned_label, "UNASSIGNED");
+    EXPECT_EQ(prior.min_molecules_per_segment, 12);
+    EXPECT_FALSE(prior.estimate_scale_from_prior);
+}
+
 TEST(PriorSegmentation, FilterLabels) {
     std::vector<int> labels = {1, 1, 1, 2, 3, 3, 3, 3};
     baysor::filter_segmentation_labels(labels, 3);
