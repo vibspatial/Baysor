@@ -61,7 +61,7 @@ User-facing documentation for this branch:
 
 ### Dependencies
 
-Install a C++17 toolchain plus the libraries required by `find_package()` in [CMakeLists.txt](CMakeLists.txt):
+Install CMake, Ninja, a C++17 toolchain, plus the libraries required by `find_package()` in [CMakeLists.txt](CMakeLists.txt):
 
 - Eigen3
 - OpenMP
@@ -71,24 +71,36 @@ Install a C++17 toolchain plus the libraries required by `find_package()` in [CM
 - HDF5
 - nlohmann_json
 - libtiff
-- GTest for the test target
+- GTest for the optional test target
 
 Several header-only dependencies are fetched automatically by CMake.
 
 ### Configure and build
 
 ```bash
-cmake -S . -B build -DBAYSOR_WITH_TESTS=OFF
-cmake --build build --target baysor -j"$(nproc)"
+cmake --preset release
+cmake --build --preset release
+```
+
+For a user-space dependency install through vcpkg:
+
+```bash
+export VCPKG_ROOT="$HOME/.local/src/vcpkg"
+cmake --preset vcpkg-release
+cmake --build --preset vcpkg-release
 ```
 
 ### Run tests
 
+Tests are not built by default. To enable them:
+
 ```bash
-cmake -S . -B build
-cmake --build build --target baysor baysor_tests -j"$(nproc)"
-ctest --test-dir build --output-on-failure
+cmake --preset tests
+cmake --build --preset tests
+ctest --preset tests
 ```
+
+Detailed platform-specific installation instructions are in [docs/installation.md](docs/installation.md).
 
 ## Citation
 

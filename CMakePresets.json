@@ -1,0 +1,102 @@
+{
+  "version": 2,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 20,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "release",
+      "displayName": "Release",
+      "description": "Release build using dependencies already visible to CMake.",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/release",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_INSTALL_PREFIX": "${sourceDir}/install",
+        "BAYSOR_WITH_TESTS": "OFF"
+      }
+    },
+    {
+      "name": "tests",
+      "displayName": "Release With Tests",
+      "description": "Release build with the optional GTest-based test target.",
+      "inherits": "release",
+      "binaryDir": "${sourceDir}/build/tests",
+      "cacheVariables": {
+        "BAYSOR_WITH_TESTS": "ON"
+      }
+    },
+    {
+      "name": "vcpkg-release",
+      "displayName": "Release With vcpkg",
+      "description": "User-space dependency install through vcpkg manifest mode.",
+      "inherits": "release",
+      "binaryDir": "${sourceDir}/build/vcpkg-release",
+      "cacheVariables": {
+        "CMAKE_TOOLCHAIN_FILE": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
+        "VCPKG_INSTALLED_DIR": "${sourceDir}/vcpkg_installed"
+      }
+    },
+    {
+      "name": "vcpkg-tests",
+      "displayName": "Release With vcpkg And Tests",
+      "description": "User-space dependency install through vcpkg, including GTest.",
+      "inherits": "vcpkg-release",
+      "binaryDir": "${sourceDir}/build/vcpkg-tests",
+      "cacheVariables": {
+        "BAYSOR_WITH_TESTS": "ON",
+        "VCPKG_MANIFEST_FEATURES": "tests"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "release",
+      "configurePreset": "release",
+      "targets": [
+        "baysor"
+      ]
+    },
+    {
+      "name": "tests",
+      "configurePreset": "tests",
+      "targets": [
+        "baysor",
+        "baysor_tests"
+      ]
+    },
+    {
+      "name": "vcpkg-release",
+      "configurePreset": "vcpkg-release",
+      "targets": [
+        "baysor"
+      ]
+    },
+    {
+      "name": "vcpkg-tests",
+      "configurePreset": "vcpkg-tests",
+      "targets": [
+        "baysor",
+        "baysor_tests"
+      ]
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "tests",
+      "configurePreset": "tests",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "vcpkg-tests",
+      "configurePreset": "vcpkg-tests",
+      "output": {
+        "outputOnFailure": true
+      }
+    }
+  ]
+}

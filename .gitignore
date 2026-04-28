@@ -6,6 +6,11 @@ builddir/
 compile_commands.json
 build.log
 *.zip
+install/
+vcpkg_installed/
+.vcpkg-bincache/
+.vcpkg/
+CMakeUserPresets.json
 
 *.DS_Store
 .vscode

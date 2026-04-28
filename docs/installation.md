@@ -1,11 +1,11 @@
 # Installation
 
-The C++ branch is built with CMake.
+The C++ branch is built with CMake. Tests are not built by default; enable them
+with `-DBAYSOR_WITH_TESTS=ON` or the `tests` / `vcpkg-tests` presets.
 
 ## Required Dependencies
 
-Install a C++ toolchain plus the libraries required by
-[CMakeLists.txt](../CMakeLists.txt):
+Baysor needs CMake, Ninja, a C++17 toolchain, plus:
 
 - Eigen3
 - OpenMP
@@ -15,20 +15,77 @@ Install a C++ toolchain plus the libraries required by
 - HDF5
 - nlohmann_json
 - libtiff
-- GTest for the optional test target
+- GTest only when `BAYSOR_WITH_TESTS=ON`
 
-Several header-only dependencies are fetched automatically by CMake.
+Several header-only UMAP dependencies are fetched automatically by CMake.
+
+## User-Space Build With vcpkg
+
+This is the recommended cross-platform path when you do not want to install most
+libraries system-wide. Dependencies are installed under the source tree or build
+tree and are ignored by git.
+
+Install vcpkg once:
+
+```bash
+git clone https://github.com/microsoft/vcpkg "$HOME/.local/src/vcpkg"
+"$HOME/.local/src/vcpkg/bootstrap-vcpkg.sh" -disableMetrics
+export VCPKG_ROOT="$HOME/.local/src/vcpkg"
+```
+
+On Windows, use PowerShell:
+
+```powershell
+git clone https://github.com/microsoft/vcpkg "$env:USERPROFILE\vcpkg"
+& "$env:USERPROFILE\vcpkg\bootstrap-vcpkg.bat" -disableMetrics
+$env:VCPKG_ROOT = "$env:USERPROFILE\vcpkg"
+```
+
+Configure and build:
+
+```bash
+cmake --preset vcpkg-release
+cmake --build --preset vcpkg-release
+```
+
+Install the binary to a user-owned prefix:
+
+```bash
+cmake --install build/vcpkg-release --prefix "$HOME/.local"
+```
+
+On macOS, install the OpenMP runtime first:
+
+```bash
+brew install libomp
+```
+
+## System Package Builds
+
+If dependencies are already installed in standard locations:
+
+```bash
+cmake --preset release
+cmake --build --preset release
+```
+
+For a custom user-owned prefix, point CMake at it:
+
+```bash
+cmake -S . -B build/release \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DBAYSOR_WITH_TESTS=OFF \
+  -DCMAKE_PREFIX_PATH="$HOME/.local" \
+  -DCMAKE_INSTALL_PREFIX="$HOME/.local"
+cmake --build build/release --target baysor -j"$(nproc)"
+cmake --install build/release
+```
 
 ## Ubuntu 24.04
 
-The repo CI and Docker build use Ubuntu 24.04. The commands below match that
-working setup.
-
-### 1. Install The Apache Arrow Apt Source
-
-Ubuntu's default repositories do not always provide the Arrow / Parquet
-development packages in the form expected by this build, so Baysor uses the
-Apache Arrow apt source.
+The Docker build uses Ubuntu 24.04. Ubuntu's default repositories do not always
+provide the Arrow / Parquet development packages in the form expected by this
+build, so the commands below use the Apache Arrow apt source.
 
 ```bash
 sudo apt-get update
@@ -40,15 +97,12 @@ sudo apt-get install -y --no-install-recommends \
 wget https://packages.apache.org/artifactory/arrow/$(lsb_release --id --short | tr 'A-Z' 'a-z')/apache-arrow-apt-source-latest-$(lsb_release --codename --short).deb
 sudo apt-get install -y --no-install-recommends ./apache-arrow-apt-source-latest-$(lsb_release --codename --short).deb
 rm ./apache-arrow-apt-source-latest-$(lsb_release --codename --short).deb
-```
 
-### 2. Install Build Dependencies
-
-```bash
 sudo apt-get update
 sudo apt-get install -y --no-install-recommends \
   build-essential \
   cmake \
+  ninja-build \
   pkg-config \
   git \
   libeigen3-dev \
@@ -60,64 +114,85 @@ sudo apt-get install -y --no-install-recommends \
   libhdf5-dev \
   nlohmann-json3-dev \
   libtiff-dev
+
+cmake --preset release
+cmake --build --preset release
 ```
 
-### 3. Configure And Build The Binary
+## macOS
 
 ```bash
-cmake -S . -B build 
-cmake --build build --target baysor -j"$(nproc)"
+brew install \
+  cmake \
+  ninja \
+  pkg-config \
+  eigen \
+  libomp \
+  spdlog \
+  cgal \
+  apache-arrow \
+  hdf5 \
+  nlohmann-json \
+  libtiff
+
+cmake --preset release
+cmake --build --preset release
 ```
 
-The main binary will be:
+## Windows
+
+Use Visual Studio 2022 or newer and the vcpkg manifest:
+
+```powershell
+cmake -S . -B build\windows -G "Visual Studio 17 2022" -A x64 `
+  -DBAYSOR_WITH_TESTS=OFF `
+  -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_ROOT\scripts\buildsystems\vcpkg.cmake" `
+  -DVCPKG_TARGET_TRIPLET=x64-windows
+cmake --build build\windows --config Release --target baysor --parallel
+```
+
+The binary will be under:
 
 ```text
-./build/baysor
+build/windows/Release/baysor.exe
 ```
 
-### 4. Optional: Build And Run Tests
+## Tests
+
+System-package build with tests:
 
 ```bash
-sudo apt-get install -y --no-install-recommends libgtest-dev
-cmake -S . -B build
-cmake --build build --target baysor baysor_tests -j"$(nproc)"
-ctest --test-dir build --output-on-failure
+cmake --preset tests
+cmake --build --preset tests
+ctest --preset tests
 ```
 
-## Configure And Build
-
-If the required libraries are already installed on your system:
+User-space vcpkg build with tests:
 
 ```bash
-cmake -S . -B build -DBAYSOR_WITH_TESTS=OFF
-cmake --build build --target baysor -j"$(nproc)"
+cmake --preset vcpkg-tests
+cmake --build --preset vcpkg-tests
+ctest --preset vcpkg-tests
 ```
 
-If you want tests too:
+## Troubleshooting Dependencies
+
+The CMake configure step checks each required dependency and prints the package
+manager command to install it when it is missing. If a dependency is installed
+in a non-standard location, set either:
 
 ```bash
-cmake -S . -B build
-cmake --build build --target baysor baysor_tests -j"$(nproc)"
-ctest --test-dir build --output-on-failure
+cmake -S . -B build -DCMAKE_PREFIX_PATH=/path/to/prefix
 ```
 
-## Common Commands
-
-Show CLI help:
+or the package-specific config directory:
 
 ```bash
-./build/baysor --help
+cmake -S . -B build -DArrow_DIR=/path/to/lib/cmake/arrow
 ```
 
-Show run-specific help:
+## Continuous Integration
 
-```bash
-./build/baysor run --help
-```
-
-## Notes
-
-- Xenium support requires the normal build dependencies only; there is no
-  separate Xenium-specific build target.
-- The `parquet` output style relies on Arrow / Parquet and HDF5 being available
-  at build time.
+The `platforms_build` workflow builds the `baysor` target on Ubuntu, macOS, and
+Windows using the vcpkg manifest. A separate Ubuntu job enables
+`BAYSOR_WITH_TESTS=ON`, builds `baysor_tests`, and runs `ctest`.

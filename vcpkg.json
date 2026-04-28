@@ -1,0 +1,30 @@
+{
+  "name": "baysor",
+  "version-string": "0.8.0",
+  "description": "C++ implementation of Baysor for imaging-based spatial transcriptomics segmentation.",
+  "dependencies": [
+    "eigen3",
+    "spdlog",
+    "cgal",
+    {
+      "name": "arrow",
+      "default-features": false,
+      "features": [
+        "compute",
+        "csv",
+        "parquet"
+      ]
+    },
+    "hdf5",
+    "nlohmann-json",
+    "tiff"
+  ],
+  "features": {
+    "tests": {
+      "description": "Dependencies needed to build and run the C++ unit tests.",
+      "dependencies": [
+        "gtest"
+      ]
+    }
+  }
+}
