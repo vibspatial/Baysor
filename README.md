@@ -86,32 +86,16 @@ tags: `aarand v1.0.2`, `CppKmeans v3.1.1`, `subpar v0.3.1`,
 
 ### Configure, build, and install
 
-After dependencies are installed, the standard CMake commands are:
+After dependencies are installed, use the same command on Linux, macOS, and
+Windows:
 
 ```bash
-cmake -S . -B build
-cmake --build build
-cmake --install build
+cmake -P cmake/build_and_install.cmake
 ```
 
 This configures an end-user build: optimized, tests off, and installed to
-`./install/bin`.
-
-The same system-package build can be run as one command:
-
-```bash
-cmake -P cmake/build_and_install.cmake
-```
-
-For a user-space dependency install through vcpkg, set `VCPKG_ROOT` first:
-
-```bash
-export VCPKG_ROOT="$HOME/.local/src/vcpkg"
-cmake -P cmake/build_and_install.cmake
-```
-
-If `VCPKG_ROOT` is set, the helper uses vcpkg. Otherwise it uses system
-packages visible to CMake.
+`./install/bin`. Platform-specific prerequisite commands are in
+[docs/installation.md](docs/installation.md).
 
 ### Run tests
 

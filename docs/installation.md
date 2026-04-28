@@ -37,79 +37,19 @@ pinned source tags:
 | `CppIrlba` | `v2.0.2` |
 | `umappp` | `v2.0.1` |
 
-## User-Space Build With vcpkg
+## Build And Install
 
-This is the recommended cross-platform path when you do not want to install most
-libraries system-wide. Dependencies are installed under the source tree or build
-tree and are ignored by git.
-
-Install vcpkg once:
-
-```bash
-git clone https://github.com/microsoft/vcpkg "$HOME/.local/src/vcpkg"
-"$HOME/.local/src/vcpkg/bootstrap-vcpkg.sh" -disableMetrics
-export VCPKG_ROOT="$HOME/.local/src/vcpkg"
-```
-
-On Windows, use PowerShell:
-
-```powershell
-git clone https://github.com/microsoft/vcpkg "$env:USERPROFILE\vcpkg"
-& "$env:USERPROFILE\vcpkg\bootstrap-vcpkg.bat" -disableMetrics
-$env:VCPKG_ROOT = "$env:USERPROFILE\vcpkg"
-```
-
-Then build and install with the same command on Linux, macOS, and Windows:
+After the platform prerequisites below are installed, use the same command on
+Linux, macOS, and Windows:
 
 ```bash
 cmake -P cmake/build_and_install.cmake
 ```
 
-This installs `baysor` to `./install/bin` by default. The default build is
-optimized, leaves tests off, and does not require writing to system directories.
-
-The equivalent manual commands are:
-
-```bash
-cmake --preset user-vcpkg
-cmake --build --preset user-vcpkg
-cmake --install build/user-vcpkg
-```
-
-On macOS, install the OpenMP runtime first:
-
-```bash
-brew install libomp
-```
-
-## System Package Builds
-
-If dependencies are already installed in standard locations, use standard CMake:
-
-```bash
-cmake -S . -B build
-cmake --build build
-cmake --install build
-```
-
-Or use the helper script:
-
-```bash
-cmake -P cmake/build_and_install.cmake
-```
-
-For a custom user-owned prefix, point CMake at it:
-
-```bash
-cmake -S . -B build/user \
-  -G Ninja \
-  -DCMAKE_BUILD_TYPE=Release \
-  -DBAYSOR_WITH_TESTS=OFF \
-  -DCMAKE_PREFIX_PATH="$HOME/.local" \
-  -DCMAKE_INSTALL_PREFIX="$HOME/.local"
-cmake --build build/user --target baysor
-cmake --install build/user
-```
+This installs `baysor` to `./install/bin` by default. The build is optimized,
+leaves tests off, and does not write to system directories. If `VCPKG_ROOT` is
+set, the helper uses the vcpkg manifest; otherwise it uses system packages
+visible to CMake.
 
 ## Ubuntu 24.04
 
@@ -144,8 +84,6 @@ sudo apt-get install -y --no-install-recommends \
   libhdf5-dev \
   nlohmann-json3-dev \
   libtiff-dev
-
-cmake -P cmake/build_and_install.cmake
 ```
 
 ## macOS
@@ -163,19 +101,20 @@ brew install \
   hdf5 \
   nlohmann-json \
   libtiff
-
-cmake -P cmake/build_and_install.cmake
 ```
 
 ## Windows
 
-Use Visual Studio 2022 or newer and the vcpkg manifest:
+Install Visual Studio 2022 or newer with the C++ workload, CMake, Git, and
+vcpkg. Then set `VCPKG_ROOT` to the vcpkg checkout:
 
 ```powershell
-cmake -P cmake/build_and_install.cmake
+git clone https://github.com/microsoft/vcpkg "$env:USERPROFILE\vcpkg"
+& "$env:USERPROFILE\vcpkg\bootstrap-vcpkg.bat" -disableMetrics
+$env:VCPKG_ROOT = "$env:USERPROFILE\vcpkg"
 ```
 
-The binary will be under:
+After running the common build command, the binary will be under:
 
 ```text
 install/bin/baysor.exe
