@@ -7,6 +7,7 @@ on:
 env:
   VCPKG_GIT_REF: 2026.03.18
   VCPKG_DISABLE_METRICS: 1
+  HOMEBREW_NO_INSTALL_CLEANUP: 1
 
 jobs:
   build:
@@ -33,7 +34,33 @@ jobs:
       - name: Checkout Baysor
         uses: actions/checkout@v4
 
+      - name: Install Ubuntu dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y -V \
+            ca-certificates \
+            lsb-release \
+            wget \
+            build-essential \
+            ninja-build \
+            libeigen3-dev \
+            libspdlog-dev \
+            libcgal-dev \
+            libhdf5-dev \
+            nlohmann-json3-dev \
+            libtiff-dev
+          wget "https://packages.apache.org/artifactory/arrow/$(lsb_release --id --short | tr 'A-Z' 'a-z')/apache-arrow-apt-source-latest-$(lsb_release --codename --short).deb"
+          sudo apt-get install -y -V "./apache-arrow-apt-source-latest-$(lsb_release --codename --short).deb"
+          sudo apt-get update
+          sudo apt-get install -y -V libarrow-dev libparquet-dev
+
+      - name: Install macOS dependencies
+        if: runner.os == 'macOS'
+        run: brew install ninja eigen spdlog cgal apache-arrow hdf5 nlohmann-json libtiff libomp
+
       - name: Checkout vcpkg
+        if: runner.os == 'Windows'
         uses: actions/checkout@v4
         with:
           repository: microsoft/vcpkg
@@ -41,6 +68,7 @@ jobs:
           path: .vcpkg
 
       - name: Restore vcpkg binary cache
+        if: runner.os == 'Windows'
         uses: actions/cache@v4
         with:
           path: .vcpkg-bincache
@@ -49,29 +77,27 @@ jobs:
             ${{ runner.os }}-${{ matrix.triplet }}-vcpkg-${{ env.VCPKG_GIT_REF }}-
 
       - name: Bootstrap vcpkg
-        if: runner.os != 'Windows'
-        run: ./.vcpkg/bootstrap-vcpkg.sh -disableMetrics
-
-      - name: Bootstrap vcpkg
         if: runner.os == 'Windows'
         shell: pwsh
         run: .\.vcpkg\bootstrap-vcpkg.bat -disableMetrics
 
-      - name: Install macOS OpenMP runtime
-        if: runner.os == 'macOS'
-        run: brew install libomp
-
-      - name: Configure
-        if: runner.os != 'Windows'
+      - name: Configure Ubuntu
+        if: runner.os == 'Linux'
         run: |
-          cmake -S . -B build/ci \
+          cmake -S . -B build/ci -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DBAYSOR_WITH_TESTS=OFF
+
+      - name: Configure macOS
+        if: runner.os == 'macOS'
+        run: |
+          cmake -S . -B build/ci -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
             -DBAYSOR_WITH_TESTS=OFF \
-            -DCMAKE_TOOLCHAIN_FILE="${VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake" \
-            -DVCPKG_TARGET_TRIPLET="${{ matrix.triplet }}" \
-            -DVCPKG_INSTALLED_DIR="${RUNNER_TEMP}/vcpkg_installed"
+            -DOpenMP_ROOT="$(brew --prefix libomp)" \
+            -DCMAKE_PREFIX_PATH="$(brew --prefix);$(brew --prefix apache-arrow);$(brew --prefix hdf5);$(brew --prefix libomp)"
 
-      - name: Configure
+      - name: Configure Windows
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
@@ -93,41 +119,37 @@ jobs:
   ubuntu_tests:
     name: Ubuntu tests
     runs-on: ubuntu-24.04
-    env:
-      VCPKG_ROOT: ${{ github.workspace }}/.vcpkg
-      VCPKG_BINARY_SOURCES: clear;files,${{ github.workspace }}/.vcpkg-bincache,readwrite
 
     steps:
       - name: Checkout Baysor
         uses: actions/checkout@v4
 
-      - name: Checkout vcpkg
-        uses: actions/checkout@v4
-        with:
-          repository: microsoft/vcpkg
-          ref: ${{ env.VCPKG_GIT_REF }}
-          path: .vcpkg
-
-      - name: Restore vcpkg binary cache
-        uses: actions/cache@v4
-        with:
-          path: .vcpkg-bincache
-          key: ubuntu-tests-vcpkg-${{ env.VCPKG_GIT_REF }}-${{ hashFiles('vcpkg.json') }}
-          restore-keys: |
-            ubuntu-tests-vcpkg-${{ env.VCPKG_GIT_REF }}-
-
-      - name: Bootstrap vcpkg
-        run: ./.vcpkg/bootstrap-vcpkg.sh -disableMetrics
+      - name: Install Ubuntu dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y -V \
+            ca-certificates \
+            lsb-release \
+            wget \
+            build-essential \
+            ninja-build \
+            libeigen3-dev \
+            libspdlog-dev \
+            libcgal-dev \
+            libhdf5-dev \
+            nlohmann-json3-dev \
+            libtiff-dev \
+            libgtest-dev
+          wget "https://packages.apache.org/artifactory/arrow/$(lsb_release --id --short | tr 'A-Z' 'a-z')/apache-arrow-apt-source-latest-$(lsb_release --codename --short).deb"
+          sudo apt-get install -y -V "./apache-arrow-apt-source-latest-$(lsb_release --codename --short).deb"
+          sudo apt-get update
+          sudo apt-get install -y -V libarrow-dev libparquet-dev
 
       - name: Configure tests
         run: |
-          cmake -S . -B build/tests \
+          cmake -S . -B build/tests -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
-            -DBAYSOR_WITH_TESTS=ON \
-            -DVCPKG_MANIFEST_FEATURES=tests \
-            -DCMAKE_TOOLCHAIN_FILE="${VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake" \
-            -DVCPKG_TARGET_TRIPLET=x64-linux \
-            -DVCPKG_INSTALLED_DIR="${RUNNER_TEMP}/vcpkg_installed-tests"
+            -DBAYSOR_WITH_TESTS=ON
 
       - name: Build tests
         run: cmake --build build/tests --target baysor baysor_tests --parallel

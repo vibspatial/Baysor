@@ -194,5 +194,7 @@ cmake -S . -B build -DArrow_DIR=/path/to/lib/cmake/arrow
 ## Continuous Integration
 
 The `platforms_build` workflow builds the `baysor` target on Ubuntu, macOS, and
-Windows using the vcpkg manifest. A separate Ubuntu job enables
-`BAYSOR_WITH_TESTS=ON`, builds `baysor_tests`, and runs `ctest`.
+Windows. Ubuntu and macOS use native binary packages so CI does not spend time
+building Apache Arrow and Thrift from source; Windows uses the vcpkg manifest.
+A separate Ubuntu job enables `BAYSOR_WITH_TESTS=ON`, builds `baysor_tests`, and
+runs `ctest`.
