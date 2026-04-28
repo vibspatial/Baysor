@@ -48,16 +48,12 @@ baysor_find_package(spdlog
 )
 
 # UMAP and dependencies (all header-only, fetched via FetchContent).
-# All deps are pre-declared with pinned tags so that FetchContent dedup
-# prevents transitive CMakeLists from fetching "master".
+# We only need the headers, so avoid adding upstream CMake projects here.
+# Some upstream CMakeLists require newer CMake versions than Baysor itself.
 include(FetchContent)
-set(BUILD_TESTING OFF CACHE BOOL "Disable tests in third-party dependencies." FORCE)
-set(EIGEN_BUILD_DOC OFF CACHE BOOL "Disable Eigen documentation in third-party dependency builds." FORCE)
-set(AARAND_TESTS OFF CACHE BOOL "Disable aarand tests." FORCE)
-set(KMEANS_TESTS OFF CACHE BOOL "Disable CppKmeans tests." FORCE)
-set(KNNCOLLE_TESTS OFF CACHE BOOL "Disable knncolle tests." FORCE)
-set(IRLBA_TESTS OFF CACHE BOOL "Disable CppIrlba tests." FORCE)
-set(UMAPPP_TESTS OFF CACHE BOOL "Disable umappp tests." FORCE)
+if(POLICY CMP0169)
+    cmake_policy(SET CMP0169 OLD)
+endif()
 FetchContent_Declare(aarand
     GIT_REPOSITORY https://github.com/LTLA/aarand
     GIT_TAG v1.0.2
@@ -83,14 +79,34 @@ FetchContent_Declare(umappp
     GIT_REPOSITORY https://github.com/LTLA/umappp
     GIT_TAG v2.0.1
 )
-# Populate all in one call; order determines FetchContent dedup priority.
-FetchContent_MakeAvailable(aarand kmeans subpar knncolle irlba umappp)
-foreach(_dependency aarand kmeans subpar knncolle irlba umappp)
-    FetchContent_GetProperties(${_dependency})
-    if(DEFINED ${_dependency}_BINARY_DIR)
-        set_property(DIRECTORY "${${_dependency}_BINARY_DIR}" PROPERTY EXCLUDE_FROM_ALL TRUE)
+
+function(baysor_fetch_header_only_dependency dependency target alias)
+    FetchContent_GetProperties(${dependency})
+    if(NOT ${dependency}_POPULATED)
+        FetchContent_Populate(${dependency})
     endif()
-endforeach()
+
+    if(NOT TARGET ${target})
+        add_library(${target} INTERFACE)
+        target_include_directories(${target} INTERFACE "${${dependency}_SOURCE_DIR}/include")
+        target_compile_features(${target} INTERFACE cxx_std_17)
+    endif()
+    if(alias AND NOT TARGET ${alias})
+        add_library(${alias} ALIAS ${target})
+    endif()
+endfunction()
+
+baysor_fetch_header_only_dependency(aarand aarand ltla::aarand)
+baysor_fetch_header_only_dependency(subpar subpar ltla::subpar)
+baysor_fetch_header_only_dependency(kmeans kmeans ltla::kmeans)
+baysor_fetch_header_only_dependency(knncolle knncolle knncolle::knncolle)
+baysor_fetch_header_only_dependency(irlba irlba ltla::irlba)
+baysor_fetch_header_only_dependency(umappp umappp libscran::umappp)
+
+target_link_libraries(kmeans INTERFACE ltla::aarand ltla::subpar)
+target_link_libraries(knncolle INTERFACE ltla::kmeans ltla::subpar)
+target_link_libraries(irlba INTERFACE Eigen3::Eigen ltla::aarand ltla::subpar)
+target_link_libraries(umappp INTERFACE ltla::aarand ltla::irlba knncolle::knncolle)
 
 # Patch irlba v2.0.2 bug: Eigen::VectorXd has no begin()/end().
 # Replace std::max_element(BS.begin(), BS.end()) with BS.maxCoeff().
