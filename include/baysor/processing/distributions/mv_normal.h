@@ -1,5 +1,7 @@
 #pragma once
 
+#include "baysor/utils/general.h"
+
 #include <Eigen/Dense>
 #include <cmath>
 #include <vector>
@@ -28,7 +30,7 @@ struct MvNormal {
     double pdf_divider;  // 0.5 * log((2*pi)^N * det(sigma))
 
     MvNormal() : mu(Vec::Zero()), sigma(Mat::Identity()), sigma_inv(Mat::Identity()),
-                 pdf_divider(0.5 * N * std::log(2.0 * M_PI)) {}
+                 pdf_divider(0.5 * N * std::log(2.0 * kPi)) {}
 
     MvNormal(const Vec& mu, const Mat& sigma);
 

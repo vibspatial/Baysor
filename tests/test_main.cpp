@@ -1223,7 +1223,7 @@ TEST(PriorSegmentation, BinaryMaskScaleUsesFilteredComponentsOnly) {
     auto [scale, scale_std] = baysor::load_prior_segmentation(
         data, prior, /*min_molecules_per_cell=*/2);
 
-    const double expected_radius = std::sqrt(4.0 / M_PI);
+    const double expected_radius = std::sqrt(4.0 / baysor::kPi);
     EXPECT_NEAR(scale, expected_radius, 1e-6);
     EXPECT_NEAR(scale_std, 0.0, 1e-6);
 
@@ -1270,7 +1270,7 @@ TEST(PriorSegmentation, LabeledMaskPreservesTouchingLabelsAndUsesLabelAreas) {
     const std::vector<int> expected_labels = {1, 1, 2, 2, 3, 3};
     EXPECT_EQ(data.prior_segmentation, expected_labels);
 
-    const double expected_radius = std::sqrt(6.0 / M_PI);
+    const double expected_radius = std::sqrt(6.0 / baysor::kPi);
     EXPECT_NEAR(scale, expected_radius, 1e-6);
     EXPECT_NEAR(scale_std, 0.0, 1e-6);
 
@@ -1330,7 +1330,7 @@ TEST(PriorSegmentation, BinaryMaskCropWindowPreservesAssignmentsAndAreas) {
 
     EXPECT_EQ(data.prior_segmentation,
               (std::vector<int>{1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3}));
-    EXPECT_NEAR(scale, std::sqrt(25.0 / M_PI), 1e-6);
+    EXPECT_NEAR(scale, std::sqrt(25.0 / baysor::kPi), 1e-6);
     EXPECT_NEAR(scale_std, 0.0, 1e-6);
 
     std::remove(mask_path.c_str());
@@ -1378,7 +1378,7 @@ TEST(PriorSegmentation, LabeledMaskCropWindowPreservesAssignmentsAndAreas) {
     auto [scale, scale_std] = baysor::load_prior_segmentation(data, prior, 2);
 
     EXPECT_EQ(data.prior_segmentation, (std::vector<int>{1, 1, 2, 2, 3, 3}));
-    EXPECT_NEAR(scale, std::sqrt(9.0 / M_PI), 1e-6);
+    EXPECT_NEAR(scale, std::sqrt(9.0 / baysor::kPi), 1e-6);
     EXPECT_NEAR(scale_std, 0.0, 1e-6);
 
     std::remove(mask_path.c_str());
