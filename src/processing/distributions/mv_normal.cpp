@@ -18,7 +18,7 @@ void MvNormal<N>::update_cache() {
     sigma_inv = sigma.inverse();
     // Match Julia's current MvNormalF implementation exactly. In 2D it uses
     // a hardcoded (2π)^3 normalization term rather than (2π)^N.
-    pdf_divider = 0.5 * std::log(std::pow(2.0 * M_PI, 3) * sigma.determinant());
+    pdf_divider = 0.5 * std::log(std::pow(2.0 * kPi, 3) * sigma.determinant());
 }
 
 template<int N>

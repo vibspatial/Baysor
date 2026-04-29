@@ -434,7 +434,7 @@ std::pair<double, double> estimate_scale_from_image_areas(
     std::vector<double> radii;
     radii.reserve(component_pixel_areas.size());
     for (size_t a : component_pixel_areas) {
-        if (a > 0) radii.push_back(std::sqrt(static_cast<double>(a) / M_PI));
+        if (a > 0) radii.push_back(std::sqrt(static_cast<double>(a) / kPi));
     }
 
     int n = static_cast<int>(radii.size());

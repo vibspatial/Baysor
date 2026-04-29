@@ -272,7 +272,7 @@ BmmData<N> initialize_bmm_data(
     // = 1 / ((2π*scale^2)^(N/2)) * exp(-0.5 * N * 9)
     double noise_position_density =
         std::exp(-0.5 * N * 9.0)
-        / std::pow(2.0 * M_PI * scale * scale, N / 2.0);
+        / std::pow(2.0 * kPi * scale * scale, N / 2.0);
 
     // Build Component objects
     // Each component: MvNormal(center_i, cov_i) + CategoricalSmoothed with all-ones counts

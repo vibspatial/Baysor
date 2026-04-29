@@ -13,6 +13,8 @@
 
 namespace baysor {
 
+inline constexpr double kPi = 3.141592653589793238462643383279502884;
+
 // --- Fast math inlines (match Julia @fastmath fmax/fmin/fsort) ---
 inline double fmax(double a, double b) { return a > b ? a : b; }
 inline double fmin(double a, double b) { return a < b ? a : b; }
