@@ -53,6 +53,50 @@ function(_baysor_run)
     endif()
 endfunction()
 
+find_program(_baysor_ninja NAMES ninja ninja-build)
+if(NOT _baysor_ninja)
+    if(APPLE)
+        set(_baysor_ninja_install_hint [=[
+On macOS, install Ninja with Homebrew:
+  brew install ninja
+
+Then rerun:
+  cmake -P cmake/build_and_install.cmake
+
+If you do not use Homebrew, install Ninja with your package manager and make sure the 'ninja' executable is on PATH.]=])
+    elseif(UNIX)
+        set(_baysor_ninja_install_hint [=[
+Install Ninja with your system package manager, for example:
+  sudo apt-get install ninja-build    # Debian/Ubuntu
+  sudo dnf install ninja-build        # Fedora
+  sudo pacman -S ninja                # Arch
+
+Then rerun:
+  cmake -P cmake/build_and_install.cmake]=])
+    elseif(WIN32)
+        set(_baysor_ninja_install_hint [=[
+Install Ninja with your package manager, for example:
+  winget install Ninja-build.Ninja
+  choco install ninja
+
+Then rerun:
+  cmake -P cmake/build_and_install.cmake
+
+Make sure the 'ninja' executable is on PATH.]=])
+    else()
+        set(_baysor_ninja_install_hint [=[
+Install Ninja from https://ninja-build.org/ and make sure the 'ninja'
+executable is on PATH. Then rerun:
+  cmake -P cmake/build_and_install.cmake]=])
+    endif()
+
+    message(FATAL_ERROR
+        "Baysor's build helper uses the Ninja CMake generator, but Ninja was "
+        "not found on PATH.\n\n"
+        "${_baysor_ninja_install_hint}"
+    )
+endif()
+
 set(_configure_args
     -S "${_source_dir}"
     -B "${_build_dir}"

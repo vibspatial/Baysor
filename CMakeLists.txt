@@ -221,8 +221,6 @@ add_library(baysor_lib
     src/processing/data_processing/neighborhood_composition.cpp
     src/processing/data_processing/noise_estimation.cpp
     src/processing/data_processing/boundary_estimation.cpp
-    src/processing/data_processing/umap_wrappers.cpp
-
     # Processing - bmm_algorithm
     src/processing/bmm_algorithm/bmm_algorithm.cpp
     src/processing/bmm_algorithm/molecule_clustering.cpp
@@ -242,6 +240,20 @@ add_library(baysor_lib
     src/reporting/run_report.cpp
 )
 
+add_library(baysor_umap_wrappers STATIC
+    src/processing/data_processing/umap_wrappers.cpp
+)
+
+target_include_directories(baysor_umap_wrappers PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+
+target_link_libraries(baysor_umap_wrappers PUBLIC
+    Eigen3::Eigen
+    umappp
+    knncolle::knncolle
+)
+
 target_include_directories(baysor_lib PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${BAYSOR_HDF5_INCLUDE_DIRS}
@@ -257,8 +269,7 @@ target_link_libraries(baysor_lib PUBLIC
     ${BAYSOR_HDF5_LIBRARIES}
     nlohmann_json::nlohmann_json
     TIFF::TIFF
-    umappp
-    knncolle::knncolle
+    baysor_umap_wrappers
 )
 
 if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
