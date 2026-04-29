@@ -235,6 +235,7 @@ add_library(baysor_lib
 
     # Reporting
     src/reporting/color_utils.cpp
+    src/reporting/gene_structure.cpp
     src/reporting/output.cpp
     src/reporting/preview_report.cpp
     src/reporting/run_report.cpp
