@@ -737,7 +737,7 @@ int main(int argc, char* argv[]) {
     bool run_skip_ncv_color = false;
 
     run->add_option("coordinates", run_coordinates,
-        "CSV or Parquet file with coordinates of molecules and gene type")
+        "CSV/Parquet molecule table, or a Xenium experiment.xenium manifest")
         ->required();
     run->add_option("prior_segmentation", run_prior_seg,
         "Prior segmentation as image mask, boundary CSV/Parquet, or ':column_name' in the coordinates file");
@@ -827,7 +827,7 @@ int main(int argc, char* argv[]) {
     std::string prev_output = "preview.html";
 
     preview->add_option("coordinates", prev_coordinates,
-        "CSV or Parquet file with coordinates of molecules and gene type")
+        "CSV/Parquet molecule table, or a Xenium experiment.xenium manifest")
         ->required();
     preview->add_option("-c,--config", config_path,
         "TOML file with configuration");
@@ -870,7 +870,7 @@ int main(int argc, char* argv[]) {
     int sf_k_neighbors = 0;
 
     segfree->add_option("coordinates", sf_coordinates,
-        "CSV or Parquet file with coordinates of molecules and gene type")
+        "CSV/Parquet molecule table, or a Xenium experiment.xenium manifest")
         ->required();
     segfree->add_option("-c,--config", config_path,
         "TOML file with configuration");
