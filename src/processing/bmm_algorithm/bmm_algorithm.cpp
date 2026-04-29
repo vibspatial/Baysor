@@ -11,7 +11,6 @@
 #include <sstream>
 #include <cmath>
 #include <numeric>
-#include <queue>
 #include <random>
 #include <unordered_map>
 #include <unordered_set>
@@ -158,7 +157,7 @@ static void adjust_densities_by_prior_segmentation(
 // ============================================================================
 
 template<int N>
-void expect_dirichlet_spatial(BmmData<N>& data, bool stochastic) {
+EstepStats expect_dirichlet_spatial(BmmData<N>& data, bool stochastic) {
     int n = data.n_molecules();
     bool has_segments = !data.segment_per_molecule.empty();
     bool has_clusters  = !data.cluster_per_molecule.empty();
@@ -328,9 +327,12 @@ void expect_dirichlet_spatial(BmmData<N>& data, bool stochastic) {
     }
 
     // Apply new assignments sequentially (preserves segment bookkeeping correctness)
+    std::int64_t n_changed = 0;
     for (int mol_id = 0; mol_id < n; ++mol_id) {
+        if (data.assignment[mol_id] != new_assignment[mol_id]) ++n_changed;
         data.assign(mol_id, new_assignment[mol_id]);
     }
+    return {n_changed};
 }
 
 // ============================================================================
@@ -386,63 +388,74 @@ void split_cells_by_connected_components(BmmData<N>& data) {
     int nc = data.n_components();
     if (nc == 0) return;
 
+    const std::vector<int> assignment_snapshot = data.assignment;
     auto ids_per_cell = split_ids(data.assignment, nc, /*drop_zero=*/true);
 
-    for (int cell_id_0 = 0; cell_id_0 < nc; ++cell_id_0) {
-        const auto& mol_ids = ids_per_cell[cell_id_0];
-        if (mol_ids.size() <= 1) continue;
-
-        int cell_id_1 = cell_id_0 + 1;  // 1-based
-
-        // Build fast lookup: mol_id → position in mol_ids
+    #pragma omp parallel
+    {
         std::unordered_map<int,int> mol_pos;
-        mol_pos.reserve(mol_ids.size());
-        for (int k = 0; k < static_cast<int>(mol_ids.size()); ++k) {
-            mol_pos[mol_ids[k]] = k;
-        }
+        std::vector<int> label;
+        std::vector<int> queue;
+        std::vector<int> cc_size;
 
-        // BFS to find connected components among mol_ids
-        int nm = static_cast<int>(mol_ids.size());
-        std::vector<int> label(nm, -1);
-        int n_cc = 0;
+        #pragma omp for schedule(dynamic, 64)
+        for (int cell_id_0 = 0; cell_id_0 < nc; ++cell_id_0) {
+            const auto& mol_ids = ids_per_cell[cell_id_0];
+            if (mol_ids.size() <= 1) continue;
 
-        std::queue<int> q;
-        for (int start = 0; start < nm; ++start) {
-            if (label[start] >= 0) continue;
-            label[start] = n_cc;
-            q.push(start);
+            int cell_id_1 = cell_id_0 + 1;  // 1-based
 
-            while (!q.empty()) {
-                int k = q.front(); q.pop();
-                int mol = mol_ids[k];
-                int nc_adj = data.adj_list.neighbor_count(mol);
-                const int32_t* nb_ids = data.adj_list.neighbor_ids(mol);
-                for (int ai = 0; ai < nc_adj; ++ai) {
-                    int nb = nb_ids[ai];
-                    if (data.assignment[nb] != cell_id_1) continue;
-                    auto it = mol_pos.find(nb);
-                    if (it == mol_pos.end()) continue;
-                    int nk = it->second;
-                    if (label[nk] >= 0) continue;
-                    label[nk] = n_cc;
-                    q.push(nk);
-                }
+            // Build fast lookup: mol_id → position in mol_ids
+            mol_pos.clear();
+            mol_pos.reserve(mol_ids.size());
+            for (int k = 0; k < static_cast<int>(mol_ids.size()); ++k) {
+                mol_pos[mol_ids[k]] = k;
             }
-            ++n_cc;
-        }
 
-        if (n_cc <= 1) continue;
+            // BFS to find connected components among mol_ids
+            int nm = static_cast<int>(mol_ids.size());
+            label.assign(nm, -1);
+            int n_cc = 0;
 
-        // Find largest connected component
-        std::vector<int> cc_size(n_cc, 0);
-        for (int l : label) cc_size[l]++;
-        int largest_cc = static_cast<int>(
-            std::max_element(cc_size.begin(), cc_size.end()) - cc_size.begin());
+            for (int start = 0; start < nm; ++start) {
+                if (label[start] >= 0) continue;
+                label[start] = n_cc;
+                queue.clear();
+                queue.push_back(start);
 
-        // Reassign non-largest CC molecules to noise
-        for (int k = 0; k < nm; ++k) {
-            if (label[k] != largest_cc) {
-                data.assignment[mol_ids[k]] = 0;
+                for (size_t head = 0; head < queue.size(); ++head) {
+                    int k = queue[head];
+                    int mol = mol_ids[k];
+                    int nc_adj = data.adj_list.neighbor_count(mol);
+                    const int32_t* nb_ids = data.adj_list.neighbor_ids(mol);
+                    for (int ai = 0; ai < nc_adj; ++ai) {
+                        int nb = nb_ids[ai];
+                        if (assignment_snapshot[nb] != cell_id_1) continue;
+                        auto it = mol_pos.find(nb);
+                        if (it == mol_pos.end()) continue;
+                        int nk = it->second;
+                        if (label[nk] >= 0) continue;
+                        label[nk] = n_cc;
+                        queue.push_back(nk);
+                    }
+                }
+                ++n_cc;
+            }
+
+            if (n_cc <= 1) continue;
+
+            // Find largest connected component
+            cc_size.assign(n_cc, 0);
+            for (int l : label) cc_size[l]++;
+            int largest_cc = static_cast<int>(
+                std::max_element(cc_size.begin(), cc_size.end()) - cc_size.begin());
+
+            // Reassign non-largest CC molecules to noise. Each molecule appears
+            // in only one cell group, so these writes are disjoint across threads.
+            for (int k = 0; k < nm; ++k) {
+                if (label[k] != largest_cc) {
+                    data.assignment[mol_ids[k]] = 0;
+                }
             }
         }
     }
@@ -563,16 +576,13 @@ void bmm(BmmData<N>& data,
         data.update_n_mols_per_segment();
 
         // E-step — track assignment changes for convergence
-        std::vector<int> old_assignment = data.assignment;
-        expect_dirichlet_spatial(data, /*stochastic=*/true);
+        EstepStats estep_stats = expect_dirichlet_spatial(data, /*stochastic=*/true);
 
         // Compute fraction of changed assignments
         if (tol > 0.0) {
-            int n_changed = 0;
             int n_total   = data.n_molecules();
-            for (int i = 0; i < n_total; ++i)
-                if (data.assignment[i] != old_assignment[i]) ++n_changed;
-            change_fracs.push_back(static_cast<double>(n_changed) / std::max(n_total, 1));
+            change_fracs.push_back(
+                static_cast<double>(estep_stats.n_changed) / std::max(n_total, 1));
         }
 
         // Periodic connected component splitting
@@ -637,8 +647,8 @@ void bmm(BmmData<N>& data,
 // Explicit instantiations
 template void bmm<2>(BmmData<2>&, int, int, int, bool, int, bool, bool, bool, bool, double, int);
 template void bmm<3>(BmmData<3>&, int, int, int, bool, int, bool, bool, bool, bool, double, int);
-template void expect_dirichlet_spatial<2>(BmmData<2>&, bool);
-template void expect_dirichlet_spatial<3>(BmmData<3>&, bool);
+template EstepStats expect_dirichlet_spatial<2>(BmmData<2>&, bool);
+template EstepStats expect_dirichlet_spatial<3>(BmmData<3>&, bool);
 template void maximize<2>(BmmData<2>&, bool, bool);
 template void maximize<3>(BmmData<3>&, bool, bool);
 template void drop_unused_components<2>(BmmData<2>&, int);

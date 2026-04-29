@@ -27,6 +27,7 @@
 #include "baysor/reporting/run_report.h"
 
 #include <Eigen/Dense>
+#include <omp.h>
 #include <cmath>
 #include <fstream>
 #include <sstream>
@@ -2844,6 +2845,37 @@ TEST(BmmLoop, PriorSegmentationAdjustmentCanFlipWinner) {
 
     EXPECT_EQ(no_prior.assignment[0], 2);
     EXPECT_EQ(with_prior.assignment[0], 1);
+}
+
+TEST(BmmLoop, EstepStatsReportsChangedAssignments) {
+    auto data = make_two_component_competition_data();
+    auto before = data.assignment;
+
+    auto stats = baysor::expect_dirichlet_spatial(data, /*stochastic=*/false);
+
+    std::int64_t expected_changed = 0;
+    for (size_t i = 0; i < before.size(); ++i) {
+        if (before[i] != data.assignment[i]) ++expected_changed;
+    }
+    EXPECT_EQ(stats.n_changed, expected_changed);
+}
+
+TEST(BmmLoop, ConnectedComponentSplitMatchesAcrossThreadCounts) {
+    auto one_thread = make_disconnected_bmm_data();
+    auto many_threads = make_disconnected_bmm_data();
+    one_thread.assignment.assign(one_thread.assignment.size(), 1);
+    many_threads.assignment = one_thread.assignment;
+
+    int old_threads = omp_get_max_threads();
+    omp_set_num_threads(1);
+    baysor::split_cells_by_connected_components(one_thread);
+    omp_set_num_threads(4);
+    baysor::split_cells_by_connected_components(many_threads);
+    omp_set_num_threads(old_threads);
+
+    const std::vector<int> expected = {1, 1, 1, 0, 0, 0, 0, 0};
+    EXPECT_EQ(one_thread.assignment, expected);
+    EXPECT_EQ(many_threads.assignment, expected);
 }
 
 TEST(BmmLoop, ClusterPenaltyCanFlipWinner) {

@@ -1,8 +1,13 @@
 #pragma once
 
 #include "baysor/processing/models/bmm_data.h"
+#include <cstdint>
 
 namespace baysor {
+
+struct EstepStats {
+    std::int64_t n_changed = 0;
+};
 
 /// Run the main BMM segmentation algorithm (EM loop).
 /// This is the core of Baysor: iterates E-step (molecule assignment) and
@@ -27,7 +32,7 @@ void bmm(BmmData<N>& data,
 
 /// E-step: reassign molecules to components based on spatial + expression density
 template<int N>
-void expect_dirichlet_spatial(BmmData<N>& data, bool stochastic = true);
+EstepStats expect_dirichlet_spatial(BmmData<N>& data, bool stochastic = true);
 
 /// M-step: re-estimate all component parameters from current assignments
 template<int N>
