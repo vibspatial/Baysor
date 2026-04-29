@@ -7,7 +7,7 @@
 
 namespace baysor {
 
-class AdjList;
+struct AdjList;
 
 struct NcvBasisModel {
     std::vector<int> basis_ids;
