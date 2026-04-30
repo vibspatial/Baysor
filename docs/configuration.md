@@ -49,7 +49,17 @@ Common fields include:
 - `n_cells_init`
 - `nuclei_genes`
 - `cyto_genes`
-- `unassigned_prior_label`
+- `unassigned_prior_label` (accepted for compatibility; prefer
+  `[prior].unassigned_label` in new configs)
+
+### `[prior]`
+
+- `type`
+- `path`
+- `column_name`
+- `unassigned_label`
+- `min_molecules_per_segment`
+- `estimate_scale_from_prior`
 
 ### `[plotting]`
 
@@ -107,6 +117,21 @@ graph clustering:
 
 Both spellings of `gene_composition_neigborhood` are accepted. The misspelled
 form is kept for compatibility with existing Julia-era configs.
+
+## Prior Options
+
+Use `[prior]` for prior-input-specific settings in new configs:
+
+```toml
+[prior]
+unassigned_label = "UNASSIGNED"
+estimate_scale_from_prior = true
+```
+
+`[segmentation].unassigned_prior_label` and
+`[segmentation].estimate_scale_from_centers` are still accepted for
+compatibility with older configs. CLI flags such as
+`--unassigned-prior-label` override both config forms.
 
 ## CLI vs Config
 

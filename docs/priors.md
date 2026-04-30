@@ -63,19 +63,29 @@ Higher values make the segmentation adhere more strongly to the prior.
 
 ## Unassigned Prior Labels
 
-When using transcript-native priors, the unassigned label can be set with:
+When using transcript-native priors, the unassigned label can be set from the
+CLI with:
 
 ```text
 --unassigned-prior-label
 ```
 
-For Xenium, the default unassigned label in [configs/xenium.toml](../configs/xenium.toml)
-is:
+or in the config with the preferred `[prior]` key:
 
 ```toml
 [prior]
 unassigned_label = "UNASSIGNED"
 ```
+
+The older Julia-style key is also accepted for compatibility:
+
+```toml
+[segmentation]
+unassigned_prior_label = "UNASSIGNED"
+```
+
+CLI flags override config values. For Xenium, [configs/xenium.toml](../configs/xenium.toml)
+sets the default unassigned label to `"UNASSIGNED"`.
 
 ## When To Use Which Prior
 

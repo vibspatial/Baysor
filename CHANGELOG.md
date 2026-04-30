@@ -2,6 +2,27 @@
 
 All notable changes to the C++ line of Baysor are documented here.
 
+## [cpp-0.8.2] — 2026-04-30
+
+### Changed
+
+- Improved prior-based scale estimation for large prior segmentations by using
+  exact KD-tree nearest-neighbor queries instead of an all-pairs center scan.
+- Reduced segmentation-loop overhead when `tol = 0` by avoiding unnecessary
+  assignment snapshot work.
+- Parallelized connected-component splitting in the segmentation loop.
+- Parallelized boundary-polygon construction across cells.
+- Parallelized graph-clustering resolution attempts for Louvain and Leiden.
+- Updated generated CLI help pages and Windows/CMake build support.
+
+### Fixed
+
+- Fixed `unassigned_prior_label` config handling and the
+  `--unassigned-prior-label` CLI override for transcript-native prior labels.
+- Fixed preservation of existing prior options when the positional
+  `prior_segmentation` argument is parsed.
+- Fixed Windows CI/build issues.
+
 ## [cpp-0.8.1] — 2026-04-22
 
 ### Added

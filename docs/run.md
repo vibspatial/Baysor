@@ -93,6 +93,11 @@ Outputs:
 - `-p,--plot`
 - `--skip-ncv-color`
 
+Prior inputs:
+
+- `--prior-segmentation-confidence`
+- `--unassigned-prior-label`
+
 For the files written by each bundle, see [Outputs](outputs.md) and
 [Output Files](output_files.md).
 
@@ -128,6 +133,18 @@ Examples:
 
 `--cluster-resolution` and `--cluster-graph-k` are advanced controls for the
 graph methods. In most datasets, the defaults are a reasonable starting point.
+
+## Threading
+
+Baysor uses OpenMP for parallel sections. Set the thread count with the
+standard OpenMP environment variable:
+
+```bash
+OMP_NUM_THREADS=20 ./build/baysor run ...
+```
+
+Some phases are intentionally serial or only partially parallel, so CPU use may
+not stay at the requested thread count for the full run.
 
 ## Config Files
 
