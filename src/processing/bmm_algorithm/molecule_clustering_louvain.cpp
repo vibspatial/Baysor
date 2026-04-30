@@ -789,10 +789,11 @@ std::vector<int> graph_partition_to_target(
         candidate_resolutions.end()
     );
 
-    std::vector<PartitionAttempt> attempts;
-    attempts.reserve(candidate_resolutions.size());
-    for (double res : candidate_resolutions) {
-        attempts.push_back(run_graph_partition_once(graph, method, res, max_passes));
+    std::vector<PartitionAttempt> attempts(candidate_resolutions.size());
+    #pragma omp parallel for schedule(dynamic, 1)
+    for (int i = 0; i < static_cast<int>(candidate_resolutions.size()); ++i) {
+        attempts[i] = run_graph_partition_once(
+            graph, method, candidate_resolutions[static_cast<size_t>(i)], max_passes);
     }
 
     const PartitionAttempt* chosen = nullptr;

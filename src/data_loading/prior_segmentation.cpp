@@ -1,4 +1,5 @@
 #include "baysor/data_loading/prior_segmentation.h"
+#include "baysor/processing/utils/utils.h"
 #include "baysor/utils/general.h"
 
 #include <algorithm>
@@ -385,14 +386,31 @@ std::pair<double, double> estimate_scale_from_assignment(
             std::to_string(n_centers) + " < 3). Please specify scale manually.");
     }
 
-    // For each center, find distance to nearest neighbor, then take radius = dist / 2
+    Eigen::MatrixXd center_mat(n_dims, n_centers);
+    for (int i = 0; i < n_centers; ++i) {
+        center_mat.col(i) = centers[i];
+    }
+
+    // For each center, find distance to nearest neighbor, then take radius = dist / 2.
+    // This is the exact same nearest-neighbor definition as the all-pairs loop,
+    // but uses the shared exact KD-tree implementation for large priors.
+    auto knn = knn_parallel(center_mat, center_mat, std::min(8, n_centers), true);
     std::vector<double> radii(n_centers);
     for (int i = 0; i < n_centers; ++i) {
         double min_dist = std::numeric_limits<double>::max();
-        for (int j = 0; j < n_centers; ++j) {
-            if (i == j) continue;
-            double dist = (centers[i] - centers[j]).norm();
-            if (dist < min_dist) min_dist = dist;
+        const auto& ids = knn.indices[i];
+        const auto& dists = knn.distances[i];
+        for (int j = 0; j < static_cast<int>(ids.size()); ++j) {
+            if (ids[j] == i) continue;
+            min_dist = dists[j];
+            break;
+        }
+        if (min_dist == std::numeric_limits<double>::max()) {
+            for (int j = 0; j < n_centers; ++j) {
+                if (i == j) continue;
+                double dist = (centers[i] - centers[j]).norm();
+                if (dist < min_dist) min_dist = dist;
+            }
         }
         radii[i] = min_dist / 2.0;
     }

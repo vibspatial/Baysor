@@ -28,7 +28,9 @@
 
 #include <Eigen/Dense>
 #include <omp.h>
+#include <algorithm>
 #include <cmath>
+#include <limits>
 #include <fstream>
 #include <sstream>
 #include <string>
@@ -1087,6 +1089,66 @@ TEST(PriorSegmentation, EstimateScale) {
     EXPECT_GE(scale_std, 0.0);
 }
 
+TEST(PriorSegmentation, EstimateScaleMatchesExactNearestCenterReference) {
+    constexpr int n_cells = 6;
+    constexpr int mols_per_cell = 4;
+    Eigen::MatrixXd centers(3, n_cells);
+    centers.col(0) << 0.0, 0.0, 0.0;
+    centers.col(1) << 5.0, 0.0, 0.0;
+    centers.col(2) << 0.0, 7.0, 1.0;
+    centers.col(3) << 10.0, 1.0, 2.0;
+    centers.col(4) << 13.0, 5.0, 1.0;
+    centers.col(5) << 20.0, 0.0, 3.0;
+
+    Eigen::MatrixXd pos(3, n_cells * mols_per_cell);
+    std::vector<int> assignment(n_cells * mols_per_cell);
+    const Eigen::Vector3d offsets[mols_per_cell] = {
+        Eigen::Vector3d(-0.1, -0.1, 0.0),
+        Eigen::Vector3d( 0.1, -0.1, 0.0),
+        Eigen::Vector3d(-0.1,  0.1, 0.0),
+        Eigen::Vector3d( 0.1,  0.1, 0.0)
+    };
+    for (int c = 0; c < n_cells; ++c) {
+        for (int m = 0; m < mols_per_cell; ++m) {
+            const int idx = c * mols_per_cell + m;
+            pos.col(idx) = centers.col(c) + offsets[m];
+            assignment[idx] = c + 1;
+        }
+    }
+
+    std::vector<double> radii(n_cells);
+    for (int i = 0; i < n_cells; ++i) {
+        double min_dist = std::numeric_limits<double>::max();
+        for (int j = 0; j < n_cells; ++j) {
+            if (i == j) continue;
+            min_dist = std::min(min_dist, (centers.col(i) - centers.col(j)).norm());
+        }
+        radii[i] = min_dist / 2.0;
+    }
+    std::sort(radii.begin(), radii.end());
+    const double expected_scale = (radii[n_cells / 2 - 1] + radii[n_cells / 2]) / 2.0;
+
+    std::vector<double> abs_devs(n_cells);
+    for (int i = 0; i < n_cells; ++i) {
+        abs_devs[i] = std::abs(radii[i] - expected_scale);
+    }
+    std::sort(abs_devs.begin(), abs_devs.end());
+    const double expected_std =
+        ((abs_devs[n_cells / 2 - 1] + abs_devs[n_cells / 2]) / 2.0) * 1.4826;
+
+    int old_threads = omp_get_max_threads();
+    omp_set_num_threads(1);
+    auto [scale_1, scale_std_1] = baysor::estimate_scale_from_assignment(pos, assignment, mols_per_cell);
+    omp_set_num_threads(4);
+    auto [scale_4, scale_std_4] = baysor::estimate_scale_from_assignment(pos, assignment, mols_per_cell);
+    omp_set_num_threads(old_threads);
+
+    EXPECT_NEAR(scale_1, expected_scale, 1e-10);
+    EXPECT_NEAR(scale_std_1, expected_std, 1e-10);
+    EXPECT_NEAR(scale_4, expected_scale, 1e-10);
+    EXPECT_NEAR(scale_std_4, expected_std, 1e-10);
+}
+
 // ============================================================================
 // Top-level prior segmentation loading
 // ============================================================================
@@ -1683,6 +1745,47 @@ TEST(Triangulation, AdjacencyList3DKNN) {
 // Boundary estimation
 // ============================================================================
 
+static std::vector<std::pair<double, double>> canonical_polygon_vertices(const Eigen::MatrixXd& poly) {
+    std::vector<std::pair<double, double>> vertices;
+    vertices.reserve(static_cast<size_t>(poly.cols()));
+    for (int i = 0; i < poly.cols(); ++i) {
+        vertices.push_back({poly(0, i), poly(1, i)});
+    }
+    if (vertices.empty()) return vertices;
+
+    auto canonicalize_direction = [](std::vector<std::pair<double, double>> vals) {
+        const auto it = std::min_element(vals.begin(), vals.end());
+        std::rotate(vals.begin(), it, vals.end());
+        return vals;
+    };
+
+    auto forward = canonicalize_direction(vertices);
+    std::reverse(vertices.begin(), vertices.end());
+    auto backward = canonicalize_direction(vertices);
+    return std::lexicographical_compare(backward.begin(), backward.end(), forward.begin(), forward.end())
+        ? backward
+        : forward;
+}
+
+static void expect_polygon_collection_near(
+    const baysor::PolygonCollection& actual,
+    const baysor::PolygonCollection& expected,
+    double tol = 1e-10
+) {
+    ASSERT_EQ(actual.size(), expected.size());
+    for (const auto& [cell, expected_poly] : expected) {
+        auto it = actual.find(cell);
+        ASSERT_NE(it, actual.end()) << cell;
+        auto actual_vertices = canonical_polygon_vertices(it->second);
+        auto expected_vertices = canonical_polygon_vertices(expected_poly);
+        ASSERT_EQ(actual_vertices.size(), expected_vertices.size()) << cell;
+        for (size_t i = 0; i < expected_vertices.size(); ++i) {
+            EXPECT_NEAR(actual_vertices[i].first, expected_vertices[i].first, tol) << cell;
+            EXPECT_NEAR(actual_vertices[i].second, expected_vertices[i].second, tol) << cell;
+        }
+    }
+}
+
 TEST(BoundaryEstimation, BoundaryPolygonsAuto3DPerZ) {
     Eigen::MatrixXd pos(3, 8);
     pos.col(0) << 0.0, 0.0, 0.0;
@@ -1722,6 +1825,44 @@ TEST(BoundaryEstimation, BoundaryPolygonsAuto3DPerZ) {
     }
     EXPECT_TRUE(saw_z0);
     EXPECT_TRUE(saw_z1);
+}
+
+TEST(BoundaryEstimation, BoundaryPolygonsAutoStableAcrossThreadCounts) {
+    constexpr int n_cells = 4;
+    constexpr int points_per_cell = 4;
+    Eigen::MatrixXd pos(3, n_cells * points_per_cell);
+    std::vector<int> assignment(n_cells * points_per_cell);
+    std::vector<std::string> cell_names = {"cell_1", "cell_2", "cell_3", "cell_4"};
+
+    auto add_square = [&](int cell, double x0, double y0, double z) {
+        const int offset = (cell - 1) * points_per_cell;
+        pos.col(offset + 0) << x0, y0, z;
+        pos.col(offset + 1) << x0 + 2.0, y0, z;
+        pos.col(offset + 2) << x0 + 2.0, y0 + 2.0, z;
+        pos.col(offset + 3) << x0, y0 + 2.0, z;
+        for (int i = 0; i < points_per_cell; ++i) assignment[offset + i] = cell;
+    };
+
+    add_square(1, 0.0, 0.0, 0.0);
+    add_square(2, 10.0, 0.0, 0.0);
+    add_square(3, 0.0, 10.0, 1.0);
+    add_square(4, 10.0, 10.0, 1.0);
+
+    int old_threads = omp_get_max_threads();
+    omp_set_num_threads(1);
+    auto [joined_1, stack_1] = baysor::boundary_polygons_auto(
+        pos, assignment, /*estimate_per_z=*/true, &cell_names, /*verbose=*/false);
+    omp_set_num_threads(4);
+    auto [joined_4, stack_4] = baysor::boundary_polygons_auto(
+        pos, assignment, /*estimate_per_z=*/true, &cell_names, /*verbose=*/false);
+    omp_set_num_threads(old_threads);
+
+    expect_polygon_collection_near(joined_4, joined_1);
+    ASSERT_EQ(stack_4.size(), stack_1.size());
+    for (size_t i = 0; i < stack_1.size(); ++i) {
+        EXPECT_EQ(stack_4[i].first, stack_1[i].first);
+        expect_polygon_collection_near(stack_4[i].second, stack_1[i].second);
+    }
 }
 
 TEST(BoundaryEstimation, BoundaryPolygonsFromGridKeepsTouchingLabelsSeparate) {
@@ -2486,6 +2627,59 @@ TEST(MoleculeClustering, GraphPartitionToTargetReturnsRequestedCountForLouvainAn
     EXPECT_EQ(lei_groups.size(), 3u);
     EXPECT_EQ(lou_summary.final_clusters, 3);
     EXPECT_EQ(lei_summary.final_clusters, 3);
+}
+
+TEST(MoleculeClustering, GraphPartitionToTargetStableAcrossThreadCounts) {
+    constexpr int patches = 8;
+    constexpr int patch_size = 6;
+    constexpr int n = patches * patch_size;
+
+    Eigen::MatrixXf mol_vecs(3, n);
+    std::vector<double> confidence(n, 1.0);
+    for (int p = 0; p < patches; ++p) {
+        Eigen::Vector3f center;
+        switch (p % 4) {
+            case 0: center << 1.0f, 0.1f, 0.0f; break;
+            case 1: center << 0.1f, 1.0f, 0.1f; break;
+            case 2: center << -1.0f, 0.2f, 0.0f; break;
+            default: center << 0.2f, -1.0f, 0.1f; break;
+        }
+        for (int i = 0; i < patch_size; ++i) {
+            const int idx = p * patch_size + i;
+            mol_vecs.col(idx) = center;
+            mol_vecs(0, idx) += 0.01f * static_cast<float>(i);
+            mol_vecs(1, idx) -= 0.005f * static_cast<float>(i);
+            confidence[idx] = 0.8 + 0.01 * static_cast<double>(i);
+        }
+    }
+
+    auto adj = baysor::build_knn_similarity_graph(mol_vecs, confidence, /*k=*/5);
+
+    for (auto method : {baysor::ClusterMethod::Louvain, baysor::ClusterMethod::Leiden}) {
+        int old_threads = omp_get_max_threads();
+        omp_set_num_threads(1);
+        baysor::GraphClusteringSummary summary_1;
+        auto assignment_1 = baysor::graph_partition_to_target(
+            adj, mol_vecs, confidence, method,
+            /*target_clusters=*/4, /*resolution_seed=*/1.0, /*max_passes=*/100, &summary_1
+        );
+        omp_set_num_threads(4);
+        baysor::GraphClusteringSummary summary_4;
+        auto assignment_4 = baysor::graph_partition_to_target(
+            adj, mol_vecs, confidence, method,
+            /*target_clusters=*/4, /*resolution_seed=*/1.0, /*max_passes=*/100, &summary_4
+        );
+        omp_set_num_threads(old_threads);
+
+        EXPECT_EQ(assignment_4, assignment_1);
+        EXPECT_EQ(summary_4.micro_clusters, summary_1.micro_clusters);
+        EXPECT_EQ(summary_4.final_clusters, summary_1.final_clusters);
+        EXPECT_DOUBLE_EQ(summary_4.chosen_resolution, summary_1.chosen_resolution);
+        ASSERT_EQ(summary_4.move_fracs.size(), summary_1.move_fracs.size());
+        for (size_t i = 0; i < summary_1.move_fracs.size(); ++i) {
+            EXPECT_DOUBLE_EQ(summary_4.move_fracs[i], summary_1.move_fracs[i]);
+        }
+    }
 }
 
 TEST(MoleculeClustering, DispatcherReturnsEmptyForNoneMethod) {

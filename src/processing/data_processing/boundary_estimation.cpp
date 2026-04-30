@@ -13,6 +13,7 @@
 #include <cmath>
 #include <limits>
 #include <numeric>
+#include <omp.h>
 #include <spdlog/spdlog.h>
 #include <sstream>
 #include <unordered_map>
@@ -391,9 +392,9 @@ PolygonCollection build_polygons_for_cells(
     }
     const double offset = mean_nn_dist * offset_rel;
 
-    PolygonCollection polygons;
-    polygons.reserve(max_label);
+    std::vector<Eigen::MatrixXd> polygons_by_cell(max_label);
 
+    #pragma omp parallel for schedule(dynamic, 32) if(!omp_in_parallel())
     for (int cid = 1; cid <= max_label; ++cid) {
         const auto& cell_ids = mids_per_cell[cid - 1];
         if (cell_ids.empty()) continue;
@@ -464,10 +465,17 @@ PolygonCollection build_polygons_for_cells(
         }
 
         if (poly.cols() == 0) continue;
+        polygons_by_cell[cid - 1] = std::move(poly);
+    }
+
+    PolygonCollection polygons;
+    polygons.reserve(max_label);
+    for (int cid = 1; cid <= max_label; ++cid) {
+        if (polygons_by_cell[cid - 1].cols() == 0) continue;
         const std::string cell_name = (cell_names && cid - 1 < static_cast<int>(cell_names->size()))
             ? (*cell_names)[cid - 1]
             : default_cell_name(cid);
-        polygons[cell_name] = std::move(poly);
+        polygons[cell_name] = std::move(polygons_by_cell[cid - 1]);
     }
 
     return polygons;
