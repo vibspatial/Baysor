@@ -14,6 +14,8 @@ All notable changes to the C++ line of Baysor are documented here.
 - Parallelized boundary-polygon construction across cells.
 - Parallelized graph-clustering resolution attempts for Louvain and Leiden.
 - Updated generated CLI help pages and Windows/CMake build support.
+- Documented Louvain with about 10 coarse clusters as the recommended starting
+  point for very large high-gene-panel Xenium runs.
 
 ### Fixed
 

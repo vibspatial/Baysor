@@ -64,6 +64,24 @@ For Xenium-origin inputs, this automatically produces Ranger-friendly:
 See [Output Files](output_files.md#legacy-bundle) for the meanings of those
 files.
 
+## Very Large / 5K Panel Runs
+
+For very large Xenium runs, particularly high-gene-panel datasets such as 5K
+panels, prefer Louvain clustering with about 10 final coarse clusters:
+
+```bash
+./build/baysor run \
+  -c configs/xenium.toml \
+  --cluster-method louvain \
+  --n-clusters 10 \
+  data/experiment.xenium :cell_id
+```
+
+The Louvain path clusters NCV basis anchors and transfers labels back to all
+molecules, which is usually a better large-run starting point than the legacy
+MRF clustering prior. Keep `--n-clusters` near `10` unless the diagnostic
+report shows clear under- or over-clustering.
+
 ## Xenium Explorer Handoff
 
 The recommended Explorer path is:

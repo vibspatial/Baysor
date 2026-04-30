@@ -134,6 +134,17 @@ Examples:
 `--cluster-resolution` and `--cluster-graph-k` are advanced controls for the
 graph methods. In most datasets, the defaults are a reasonable starting point.
 
+For very large runs, especially high-gene-panel Xenium runs such as 5K panels,
+prefer Louvain clustering with about 10 coarse clusters:
+
+```bash
+./build/baysor run --cluster-method louvain --n-clusters 10 ...
+```
+
+This keeps the clustering prior coarse enough for large-scale segmentation
+while using the anchor-based NCV graph path instead of the legacy MRF
+clustering model.
+
 ## Threading
 
 Baysor uses OpenMP for parallel sections. Set the thread count with the

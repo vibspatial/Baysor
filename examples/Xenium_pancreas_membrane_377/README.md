@@ -80,6 +80,14 @@ Graph-based clustering uses NCV basis anchors and then transfers the final
 labels back to all molecules. For `louvain`, `--n-clusters` is the target final
 number of coarse clusters after anchor communities are merged.
 
+For very large Xenium runs, especially high-gene-panel datasets such as 5K
+panels, use `louvain` with about 10 final coarse clusters as the starting
+point:
+
+```bash
+--cluster-method louvain --n-clusters 10
+```
+
 Examples:
 
 ```bash

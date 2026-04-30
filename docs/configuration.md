@@ -102,6 +102,19 @@ The segmentation pre-clustering step can be configured through
   - maximum number of basis anchors used by graph clustering and shared NCV
     embedding
 
+For very large runs, especially high-gene-panel Xenium runs such as 5K panels,
+the recommended clustering prior is:
+
+```toml
+[segmentation]
+cluster_method = "louvain"
+n_clusters = 10
+```
+
+Treat `10` as a practical starting point for the final coarse cluster count.
+Increase or decrease it only if the diagnostic report suggests the expression
+structure is clearly under- or over-clustered.
+
 ## NCV Neighborhoods
 
 Two different neighborhood sizes matter for NCV-based reporting and
