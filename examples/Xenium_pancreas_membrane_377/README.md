@@ -9,7 +9,7 @@ The panel has 377 genes. The dataset page reports 140,702 detected cells and
 
 ## Get The Data
 
-Use `data/` for the raw Xenium bundle and `tests/` for Baysor outputs.
+Use a local `data/` directory for the raw Xenium bundle and `tests/` for Baysor outputs.
 
 ```bash
 mkdir -p data tests
@@ -35,7 +35,7 @@ The main files used below are:
 For Xenium runs, prefer passing `experiment.xenium` as the main input:
 
 ```bash
-../../build/baysor run ... ./data/experiment.xenium ...
+build/baysor run ... data/experiment.xenium ...
 ```
 
 That gives Baysor enough source context to:
@@ -50,7 +50,7 @@ the cleaner Xenium-aware path.
 
 ## CLI Runs
 
-These commands assume you run them from this directory. Use `../../build/baysor`
+These commands assume you run them from the Baysor repo root. Use `build/baysor`
 if running the binary from the repo build tree, or replace it with `baysor` if
 the executable is already on your `PATH`.
 
@@ -59,10 +59,10 @@ the executable is already on your `PATH`.
 This uses the `cell_id` column already present in the Xenium transcript table.
 
 ```bash
-../../build/baysor run \
-  -c ../../configs/xenium.toml \
-  -o ./tests/full_cellid \
-  ./data/experiment.xenium \
+build/baysor run \
+  -c configs/xenium.toml \
+  -o tests/full_cellid \
+  data/experiment.xenium \
   :cell_id
 ```
 
@@ -91,22 +91,22 @@ point:
 Examples:
 
 ```bash
-../../build/baysor run \
+build/baysor run \
   -p \
-  -c ../../configs/xenium.toml \
-  -o ./tests/full_cellid_mrf \
-  ./data/experiment.xenium \
+  -c configs/xenium.toml \
+  -o tests/full_cellid_mrf \
+  data/experiment.xenium \
   :cell_id
 ```
 
 ```bash
-../../build/baysor run \
+build/baysor run \
   -p \
   --cluster-method louvain \
   --n-clusters 10 \
-  -c ../../configs/xenium.toml \
-  -o ./tests/full_cellid_louvain_k10 \
-  ./data/experiment.xenium \
+  -c configs/xenium.toml \
+  -o tests/full_cellid_louvain_k10 \
+  data/experiment.xenium \
   :cell_id
 ```
 
@@ -119,21 +119,21 @@ This assigns molecules to prior segments by point-in-polygon against the Xenium
 cell boundary file.
 
 ```bash
-../../build/baysor run \
-  -c ../../configs/xenium.toml \
-  -o ./tests/full_cell_boundaries \
-  ./data/experiment.xenium \
-  ./data/cell_boundaries.parquet
+build/baysor run \
+  -c configs/xenium.toml \
+  -o tests/full_cell_boundaries \
+  data/experiment.xenium \
+  data/cell_boundaries.parquet
 ```
 
 ### Full Run With Nucleus Boundary Priors
 
 ```bash
-../../build/baysor run \
-  -c ../../configs/xenium.toml \
-  -o ./tests/full_nucleus_boundaries \
-  ./data/experiment.xenium \
-  ./data/nucleus_boundaries.parquet
+build/baysor run \
+  -c configs/xenium.toml \
+  -o tests/full_nucleus_boundaries \
+  data/experiment.xenium \
+  data/nucleus_boundaries.parquet
 ```
 
 ### Full Run Without Priors
@@ -141,11 +141,11 @@ cell boundary file.
 Without any prior segmentation input, Baysor needs an explicit scale.
 
 ```bash
-../../build/baysor run \
-  -c ../../configs/xenium.toml \
+build/baysor run \
+  -c configs/xenium.toml \
   --scale 4.5 \
-  -o ./tests/full_no_prior \
-  ./data/experiment.xenium
+  -o tests/full_no_prior \
+  data/experiment.xenium
 ```
 
 ## Output Modes
@@ -168,11 +168,11 @@ extra fields needed by `xeniumranger import-segmentation`:
 ### Legacy Output
 
 ```bash
-../../build/baysor run \
-  -c ../../configs/xenium.toml \
+build/baysor run \
+  -c configs/xenium.toml \
   --output-style legacy \
-  -o ./tests/full_cellid_legacy \
-  ./data/experiment.xenium \
+  -o tests/full_cellid_legacy \
+  data/experiment.xenium \
   :cell_id
 ```
 
@@ -187,11 +187,11 @@ This emits:
 - `feature_matrix.h5`
 
 ```bash
-../../build/baysor run \
-  -c ../../configs/xenium.toml \
+build/baysor run \
+  -c configs/xenium.toml \
   --output-style parquet \
-  -o ./tests/full_cellid_parquet \
-  ./data/experiment.xenium \
+  -o tests/full_cellid_parquet \
+  data/experiment.xenium \
   :cell_id
 ```
 
@@ -204,17 +204,17 @@ The current recommended path to Xenium Explorer is:
 
 Use these two Baysor outputs for the handoff:
 
-- `./tests/full_cellid/segmentation.csv`
-- `./tests/full_cellid/segmentation_polygons_2d.json`
+- `tests/full_cellid/segmentation.csv`
+- `tests/full_cellid/segmentation_polygons_2d.json`
 
 Example conversion command:
 
 ```bash
 xeniumranger import-segmentation \
   --id baysor_pancreas \
-  --xenium-bundle ./data \
-  --transcript-assignment ./tests/full_cellid/segmentation.csv \
-  --viz-polygons ./tests/full_cellid/segmentation_polygons_2d.json \
+  --xenium-bundle data \
+  --transcript-assignment tests/full_cellid/segmentation.csv \
+  --viz-polygons tests/full_cellid/segmentation_polygons_2d.json \
   --units microns
 ```
 
@@ -237,37 +237,37 @@ is useful for testing and for very large datasets.
 ### Crop With Transcript-Native Prior Labels
 
 ```bash
-../../build/baysor run \
-  -c ../../configs/xenium.toml \
+build/baysor run \
+  -c configs/xenium.toml \
   --x-min 0 --x-max 2000 \
   --y-min 0 --y-max 2000 \
-  -o ./tests/crop_cellid \
-  ./data/experiment.xenium \
+  -o tests/crop_cellid \
+  data/experiment.xenium \
   :cell_id
 ```
 
 ### Crop With Cell Boundary Priors
 
 ```bash
-../../build/baysor run \
-  -c ../../configs/xenium.toml \
+build/baysor run \
+  -c configs/xenium.toml \
   --x-min 0 --x-max 2000 \
   --y-min 0 --y-max 2000 \
-  -o ./tests/crop_cell_boundaries \
-  ./data/experiment.xenium \
-  ./data/cell_boundaries.parquet
+  -o tests/crop_cell_boundaries \
+  data/experiment.xenium \
+  data/cell_boundaries.parquet
 ```
 
 ### Crop Without Priors
 
 ```bash
-../../build/baysor run \
-  -c ../../configs/xenium.toml \
+build/baysor run \
+  -c configs/xenium.toml \
   --x-min 0 --x-max 2000 \
   --y-min 0 --y-max 2000 \
   --scale 4.5 \
-  -o ./tests/crop_no_prior \
-  ./data/experiment.xenium
+  -o tests/crop_no_prior \
+  data/experiment.xenium
 ```
 
 Do not use cropped runs as the input to `xeniumranger import-segmentation`.
