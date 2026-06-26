@@ -56,6 +56,8 @@ All notable changes to the C++ line of Baysor are documented here.
 
 ### Fixed
 
+- Fixed Loom matrix orientation so `/matrix` rows match `/row_attrs` genes and
+  columns match `/col_attrs` cells.
 - Reduced clustering memory by removing the per-thread dense gene-by-gene correlation matrix.
 - Reduced segmentation memory by switching persistent component gene counts away from dense `double` storage.
 - Reduced NCV memory by removing global all-molecule neighborhood materialization and the full all-molecule high-dimensional NCV matrix from the `run` and `preview` paths.

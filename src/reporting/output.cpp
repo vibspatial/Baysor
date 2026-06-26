@@ -241,7 +241,7 @@ static nlohmann::json polygons_to_geojson_json(
 // Loom spec: https://linnarssonlab.org/loompy/format/index.html
 //
 // Layout produced (mirrors Julia's save_matrix_to_loom):
-//   /matrix            float32  n_cells × n_genes  (chunked, shuffle+deflate)
+//   /matrix            float32  n_genes × n_cells  (chunked, shuffle+deflate)
 //   /row_attrs/Name    variable-length UTF-8 strings  [n_genes]
 //   /col_attrs/Name    variable-length UTF-8 strings  [n_cells]
 //   /col_attrs/CellID  float64  [n_cells]   (1-based indices)
@@ -312,6 +312,14 @@ void save_matrix_to_loom(
         throw std::runtime_error("save_matrix_to_loom: gene_names length mismatch");
     if (static_cast<int>(cell_names.size()) != n_cells)
         throw std::runtime_error("save_matrix_to_loom: cell_names length mismatch");
+    for (const auto& [key, val] : col_attrs) {
+        size_t attr_len = std::holds_alternative<std::vector<std::string>>(val)
+            ? std::get<std::vector<std::string>>(val).size()
+            : std::get<std::vector<double>>(val).size();
+        if (attr_len != static_cast<size_t>(n_cells)) {
+            throw std::runtime_error("save_matrix_to_loom: col_attrs '" + key + "' length mismatch");
+        }
+    }
 
     // Open file
     hid_t fid = H5Fcreate(path.c_str(), H5F_ACC_TRUNC, H5P_DEFAULT, H5P_DEFAULT);
@@ -319,11 +327,11 @@ void save_matrix_to_loom(
 
     // ---- /matrix (float32, chunked, shuffle + deflate-3) ----
     {
-        hsize_t dims[2]  = { static_cast<hsize_t>(n_cells),
-                             static_cast<hsize_t>(n_genes) };
-        constexpr int row_block = 128;
-        hsize_t chunk[2] = { static_cast<hsize_t>(std::min(n_cells, row_block)),
-                             static_cast<hsize_t>(std::min(n_genes, 256)) };
+        hsize_t dims[2]  = { static_cast<hsize_t>(n_genes),
+                             static_cast<hsize_t>(n_cells) };
+        constexpr int cell_block = 128;
+        hsize_t chunk[2] = { static_cast<hsize_t>(std::min(n_genes, 256)),
+                             static_cast<hsize_t>(std::min(n_cells, cell_block)) };
 
         hid_t space  = H5Screate_simple(2, dims, nullptr);
         hid_t plist  = H5Pcreate(H5P_DATASET_CREATE);
@@ -335,27 +343,27 @@ void save_matrix_to_loom(
                                H5P_DEFAULT, plist, H5P_DEFAULT);
         check(ds, "create /matrix");
 
-        // Write in row blocks to reduce HDF5 call overhead without
-        // materializing the full dense matrix.
-        std::vector<float> block_buf(static_cast<size_t>(row_block) * static_cast<size_t>(n_genes), 0.0f);
+        // Write Loom rows as genes. The input matrix stays cells x genes to
+        // match the other count-matrix writers.
+        std::vector<float> block_buf(static_cast<size_t>(n_genes) * static_cast<size_t>(cell_block), 0.0f);
         hsize_t block_offset[2] = {0, 0};
 
-        for (int block_start = 0; block_start < n_cells; block_start += row_block) {
-            int n_block_rows = std::min(row_block, n_cells - block_start);
-            std::fill(block_buf.begin(), block_buf.begin() + static_cast<size_t>(n_block_rows) * static_cast<size_t>(n_genes), 0.0f);
-            for (int local_row = 0; local_row < n_block_rows; ++local_row) {
-                int row = block_start + local_row;
-                float* row_ptr = block_buf.data() + static_cast<size_t>(local_row) * static_cast<size_t>(n_genes);
-                for (Eigen::SparseMatrix<float, Eigen::RowMajor>::InnerIterator it(matrix, row); it; ++it) {
-                    row_ptr[it.col()] = it.value();
+        for (int block_start = 0; block_start < n_cells; block_start += cell_block) {
+            int n_block_cols = std::min(cell_block, n_cells - block_start);
+            std::fill(block_buf.begin(), block_buf.begin() + static_cast<size_t>(n_genes) * static_cast<size_t>(n_block_cols), 0.0f);
+            for (int local_col = 0; local_col < n_block_cols; ++local_col) {
+                int cell = block_start + local_col;
+                for (Eigen::SparseMatrix<float, Eigen::RowMajor>::InnerIterator it(matrix, cell); it; ++it) {
+                    int gene = it.col();
+                    block_buf[static_cast<size_t>(gene) * static_cast<size_t>(n_block_cols) + static_cast<size_t>(local_col)] = it.value();
                 }
             }
 
             hsize_t block_dims[2] = {
-                static_cast<hsize_t>(n_block_rows),
-                static_cast<hsize_t>(n_genes)
+                static_cast<hsize_t>(n_genes),
+                static_cast<hsize_t>(n_block_cols)
             };
-            block_offset[0] = static_cast<hsize_t>(block_start);
+            block_offset[1] = static_cast<hsize_t>(block_start);
 
             hid_t file_space = H5Dget_space(ds);
             H5Sselect_hyperslab(file_space, H5S_SELECT_SET,

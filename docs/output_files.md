@@ -149,7 +149,7 @@ Structure:
 HDF5 layout written by the current C++ implementation:
 - `/matrix`
   - dataset type: `float32`
-  - shape: `(C, G)`
+  - shape: `(G, C)`
 - `/attrs/LOOM_SPEC_VERSION`
   - variable-length UTF-8 string
   - value: `"3.0.0"`
@@ -171,7 +171,7 @@ HDF5 layout written by the current C++ implementation:
 
 Notes:
 - matrix values are counts
-- the matrix is written in a row-oriented block path for performance
+- rows are genes and columns are cells, matching Loom row/column attributes
 
 ### `segmentation_counts.tsv`
 

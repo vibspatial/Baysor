@@ -2038,6 +2038,92 @@ TEST(Output, SaveMatrixTo10xH5WritesExpectedStructure) {
     H5Fclose(fid);
 }
 
+TEST(Output, SaveMatrixToLoomWritesGeneByCellMatrix) {
+    Eigen::SparseMatrix<float, Eigen::RowMajor> matrix(2, 3);  // cells x genes
+    std::vector<Eigen::Triplet<float>> trips = {
+        {0, 0, 2.0f},
+        {0, 2, 5.0f},
+        {1, 1, 7.0f}
+    };
+    matrix.setFromTriplets(trips.begin(), trips.end());
+    matrix.makeCompressed();
+
+    const std::vector<std::string> gene_names = {"G1", "G2", "G3"};
+    const std::vector<std::string> cell_names = {"cell_1", "cell_2"};
+    const std::string path = write_temp_csv("", ".loom");
+
+    baysor::save_matrix_to_loom(matrix, gene_names, cell_names, path);
+
+    hid_t fid = H5Fopen(path.c_str(), H5F_ACC_RDONLY, H5P_DEFAULT);
+    ASSERT_GE(fid, 0);
+
+    hid_t matrix_ds = H5Dopen2(fid, "/matrix", H5P_DEFAULT);
+    ASSERT_GE(matrix_ds, 0);
+    hid_t matrix_space = H5Dget_space(matrix_ds);
+    hsize_t matrix_dims[2] = {0, 0};
+    ASSERT_EQ(H5Sget_simple_extent_ndims(matrix_space), 2);
+    ASSERT_EQ(H5Sget_simple_extent_dims(matrix_space, matrix_dims, nullptr), 2);
+    EXPECT_EQ(matrix_dims[0], 3);
+    EXPECT_EQ(matrix_dims[1], 2);
+
+    std::vector<float> values(6, -1.0f);
+    ASSERT_GE(H5Dread(matrix_ds, H5T_NATIVE_FLOAT, H5S_ALL, H5S_ALL, H5P_DEFAULT, values.data()), 0);
+    const std::vector<float> expected = {
+        2.0f, 0.0f,
+        0.0f, 7.0f,
+        5.0f, 0.0f
+    };
+    EXPECT_EQ(values, expected);
+    H5Sclose(matrix_space);
+    H5Dclose(matrix_ds);
+
+    hid_t row_name_ds = H5Dopen2(fid, "/row_attrs/Name", H5P_DEFAULT);
+    ASSERT_GE(row_name_ds, 0);
+    hid_t row_name_space = H5Dget_space(row_name_ds);
+    hsize_t row_dims[1] = {0};
+    ASSERT_EQ(H5Sget_simple_extent_ndims(row_name_space), 1);
+    ASSERT_EQ(H5Sget_simple_extent_dims(row_name_space, row_dims, nullptr), 1);
+    EXPECT_EQ(row_dims[0], 3);
+    H5Sclose(row_name_space);
+    H5Dclose(row_name_ds);
+
+    hid_t col_name_ds = H5Dopen2(fid, "/col_attrs/Name", H5P_DEFAULT);
+    ASSERT_GE(col_name_ds, 0);
+    hid_t col_name_space = H5Dget_space(col_name_ds);
+    hsize_t col_dims[1] = {0};
+    ASSERT_EQ(H5Sget_simple_extent_ndims(col_name_space), 1);
+    ASSERT_EQ(H5Sget_simple_extent_dims(col_name_space, col_dims, nullptr), 1);
+    EXPECT_EQ(col_dims[0], 2);
+    H5Sclose(col_name_space);
+    H5Dclose(col_name_ds);
+
+    hid_t cell_id_ds = H5Dopen2(fid, "/col_attrs/CellID", H5P_DEFAULT);
+    ASSERT_GE(cell_id_ds, 0);
+    hid_t cell_id_space = H5Dget_space(cell_id_ds);
+    hsize_t cell_id_dims[1] = {0};
+    ASSERT_EQ(H5Sget_simple_extent_ndims(cell_id_space), 1);
+    ASSERT_EQ(H5Sget_simple_extent_dims(cell_id_space, cell_id_dims, nullptr), 1);
+    EXPECT_EQ(cell_id_dims[0], 2);
+    H5Sclose(cell_id_space);
+    H5Dclose(cell_id_ds);
+
+    H5Fclose(fid);
+}
+
+TEST(Output, SaveMatrixToLoomRejectsMismatchedColAttrLength) {
+    Eigen::SparseMatrix<float> matrix(2, 3);  // cells x genes
+    const std::vector<std::string> gene_names = {"G1", "G2", "G3"};
+    const std::vector<std::string> cell_names = {"cell_1", "cell_2"};
+    const std::string path = write_temp_csv("", ".loom");
+
+    baysor::LoomColAttrs col_attrs;
+    col_attrs["confidence"] = std::vector<double>{0.5};
+
+    EXPECT_THROW(
+        baysor::save_matrix_to_loom(matrix, gene_names, cell_names, path, col_attrs),
+        std::runtime_error);
+}
+
 TEST(Xenium, ManifestHelpers) {
     EXPECT_TRUE(baysor::is_xenium_manifest_path("experiment.xenium"));
     EXPECT_FALSE(baysor::is_xenium_manifest_path("transcripts.parquet"));

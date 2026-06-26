@@ -73,6 +73,7 @@ using LoomColAttrs = std::map<std::string,
 
 /// Save count matrix to Loom (HDF5) format.
 /// matrix  : n_cells × n_genes  (rows = cells/NCVs, cols = genes)
+/// on disk : /matrix is n_genes × n_cells to match Loom row/column attributes
 /// col_attrs: optional extra per-cell attributes (e.g. ncv_color, confidence)
 void save_matrix_to_loom(const Eigen::SparseMatrix<float>& matrix,
                          const std::vector<std::string>& gene_names,
