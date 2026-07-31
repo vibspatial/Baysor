@@ -728,7 +728,7 @@ int main(int argc, char* argv[]) {
     auto* run = app.add_subcommand("run", "Run cell segmentation");
 
     std::string run_coordinates, run_prior_seg;
-    std::string run_output = "segmentation.csv";
+    std::string run_output = "segmentation";
     std::string run_output_style = "legacy";
     std::string run_polygon_format = "FeatureCollection";
     std::string run_count_format = "loom";
@@ -797,7 +797,7 @@ int main(int argc, char* argv[]) {
     run->add_option("--cyto-genes", opts.segmentation.cyto_genes,
         "Comma-separated list of cytoplasm-specific genes");
     run->add_option("-o,--output", run_output,
-        "Output directory (default: segmentation.csv for legacy compatibility)");
+        "Output directory (default: segmentation)");
     run->add_option("--output-style", run_output_style,
         "Output bundle style: legacy or parquet (default: legacy)");
     run->add_option("--polygon-format", run_polygon_format,
