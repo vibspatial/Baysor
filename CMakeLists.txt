@@ -157,7 +157,7 @@ if(NOT TARGET Arrow::arrow_shared AND NOT TARGET Arrow::arrow_static)
 endif()
 baysor_find_package(HDF5
     COMPONENTS C
-    INSTALL_HINT "Ubuntu: sudo apt-get install libhdf5-dev\nmacOS: brew install hdf5\nvcpkg: vcpkg install hdf5"
+    INSTALL_HINT "Ubuntu: sudo apt-get install libhdf5-dev\nmacOS: brew install hdf5\nvcpkg: vcpkg install 'hdf5[zlib]'"
 )
 baysor_find_package(nlohmann_json
     TARGET nlohmann_json::nlohmann_json

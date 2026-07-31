@@ -15,7 +15,13 @@
         "parquet"
       ]
     },
-    "hdf5",
+    {
+      "name": "hdf5",
+      "default-features": false,
+      "features": [
+        "zlib"
+      ]
+    },
     "nlohmann-json",
     "tiff"
   ],
