@@ -159,6 +159,13 @@ during the long-running calculation, and translates C++ failures into documented
 Python exceptions. Neither frontend may duplicate parameter resolution or
 scientific orchestration.
 
+The request includes one 64-bit native `random_seed`, defaulting to `1`. The
+shared operation owns run-local random state and returns the resolved seed in
+provenance. The refactored CLI exposes it as `--seed`; the Python API forwards
+the same field and must not maintain a separate Python random stream for native
+segmentation. Enabling reporting or other optional diagnostics must not consume
+the scientific stream and change assignments.
+
 ```text
                          C++ run_segmentation(...)
                                   |
@@ -684,6 +691,8 @@ SpatialData output metadata should record:
 - all resolved Baysor and adapter-side parameters;
 - source points, prior labels, and coordinate system;
 - global filtering decisions and feature-panel identity;
+- the master native seed and, for tiled runs, the deterministic effective seed
+  assigned to each stable tile identity;
 - tile core and halo bounds;
 - per-tile input and output checksums and status;
 - Dask and Distributed versions, cluster ownership, worker configuration,
@@ -763,6 +772,7 @@ The public API contract must expose:
 - `prior_segmentation_confidence`;
 - `min_molecules_per_cell`;
 - `iters` and `tol`;
+- a 64-bit native `random_seed`, defaulting to `1`;
 - native build identity and supported execution settings;
 - OpenMP thread count;
 - work directory and intermediate-retention policy; and
@@ -1296,6 +1306,8 @@ Deliverables:
   be proposed upstream;
 - define `SegmentationRequest`, `SegmentationResult`, and
   `run_segmentation(...)` in the Baysor C++ library;
+- include a 64-bit `random_seed` with default `1`, run-local random state, and
+  resolved-seed provenance in that native contract;
 - define a C++17-compatible thread-safe cancellation token and safe cancellation
   checkpoints for the complete run operation;
 - move scientific orchestration and parameter resolution out of CLI
@@ -1338,12 +1350,13 @@ SegmentationResult     distinct cancelled outcome
 `SegmentationRequest` is a typed native contract. It contains the molecule-input
 specification, optional prior-segmentation specification, molecule/filtering
 options, segmentation and clustering options, confidence/noise options, requested
-scientific products, and execution settings. It contains no `argv`, CLI aliases,
-presentation strings, process exit policy, or Python objects. The frontend parses
-its configuration into this request. The operation performs the canonical
-data-dependent resolution that requires loaded molecules or a prior, such as
-inferred scale and initial cell count, and records the final resolved values in
-the result. No frontend may independently reproduce that resolution.
+scientific products, a 64-bit native random seed, and execution settings. It
+contains no `argv`, CLI aliases, presentation strings, process exit policy, or
+Python objects. The frontend parses its configuration into this request. The
+operation performs the canonical data-dependent resolution that requires loaded
+molecules or a prior, such as inferred scale and initial cell count, and records
+the final resolved values and seed in the result. No frontend may independently
+reproduce that resolution or substitute another random stream.
 
 `SegmentationResult` owns the complete scientific products required by the
 serializers: retained molecule identity and data, cell/noise assignments,
@@ -1405,10 +1418,24 @@ outcome without a complete `SegmentationResult`; completed serializers must not
 run for that attempt. Process termination remains a later supervisor fallback,
 not the primary native cancellation mechanism.
 
+Randomness likewise has one shared native implementation. The immutable N0 CLI
+reference remains untouched and is captured in a fresh process with one OpenMP
+thread; its implicit segmentation seed is `1`. The maintained operation creates
+run-local random state from `SegmentationRequest::random_seed` rather than
+resetting mutable process-global state. Scientific and diagnostic-only random
+streams are separated so requesting a report cannot change segmentation. The
+same input, build, platform, seed, options, and one-thread configuration must be
+repeatable across fresh and repeated same-process calls. A seed alone does not
+promise bitwise-identical multi-threaded execution because dynamic OpenMP
+scheduling and parallel floating-point work can still vary; those runs retain a
+locked thread configuration and a measured repeatability baseline.
+
 Focused C++ tests must cover a complete direct run, inspection of core result and
 resolved-option fields, invalid-request error handling, cancellation before a
 completed result is published, result ownership after working objects are
 destroyed, and repeated same-process calls without hidden global-state leakage.
+The same-process coverage includes repeated one-thread calls with the same seed
+and verifies that one call does not advance another call's random stream.
 Full pinned-CLI parity is the Slice 1B gate.
 
 Native exit criterion: a C++ test can execute a complete segmentation through
@@ -1446,6 +1473,8 @@ Deliverables:
 
 - reduce the CLI to argument/configuration parsing, invocation of
   `run_segmentation(...)`, serialization, and user-facing reporting;
+- expose `--seed` as the CLI spelling of the shared native seed, with default
+  `1`, and record it in resolved options and provenance;
 - ensure the CLI and direct C++ path use the same parameter resolution and
   serializers;
 - compare the refactored CLI with the untouched pinned CLI on the same fixture;
@@ -1571,9 +1600,12 @@ every supported CPython minor version and has a clean strict Stable-ABI audit.
 
 All parity paths must use the exact same input files, pinned Baysor revision,
 configuration, OpenMP thread count, output mode, and controllable execution
-settings. The pinned C++ CLI does not expose a general segmentation seed, so the
-Python API must not invent one; comparisons should be repeated when checking for
-parallel variability.
+settings. The immutable N0 CLI does not expose a seed flag and is therefore run
+as a fresh one-thread process using its implicit seed of `1`. The shared native
+operation, refactored CLI, and Python API expose that same seed explicitly;
+baseline parity uses `random_seed=1`. Multi-threaded comparisons lock the thread
+count and are repeated to characterize scheduling and floating-point variability
+rather than assuming that a seed guarantees bitwise identity.
 
 Comparison includes retained transcript identity, cell/noise assignments,
 molecule confidence, count matrices, cell statistics, resolved parameters, and
@@ -1612,6 +1644,8 @@ installed on every platform in the required release matrix.
 Deliverables:
 
 - Dask-independent tile descriptor, attempt-output, and result contracts;
+- a master run seed and a deterministic effective native seed derived from the
+  master seed and stable tile identity, both retained in each tile descriptor;
 - SpatialData-adapter stable transcript-ID and prior preparation against that
   contract;
 - one globally filtered feature panel and a contract that disables a second
@@ -1657,7 +1691,9 @@ Deliverables:
 - application of the common global confidence/noise calibration once supported
   by the native backend;
 - workflow-controlled retry/resume behavior that never reuses an incomplete
-  attempt directory; and
+  attempt directory;
+- reuse of the same effective tile seed for every retry or resumed execution of
+  a given compatible tile descriptor; and
 - validation that every expected tile completed with compatible schemas and
   parameters.
 
@@ -1712,9 +1748,9 @@ crops before deciding whether clustering materially improves segmentation.
 
 Deliverables:
 
-- selected baseline parameters;
-- repeated untiled runs under locked execution settings to quantify residual
-  stochastic variability;
+- selected baseline parameters, including the native random seed;
+- repeated untiled runs under the locked seed, build, and execution settings to
+  quantify residual stochastic variability;
 - an untiled 100-iteration full-mosaic reference result;
 - resource measurements;
 - visual overlays and biological QC; and
@@ -1786,12 +1822,14 @@ tile boundary.
 
 At the `baysor_python` layer, verify that `segment(...)` matches the direct pinned
 CLI for identical inputs, parameters, output mode, and controllable execution
-settings. The current pinned CLI has no general segmentation-seed option, so
-repeat the comparison when checking for parallel variability. Verify separately
-that `boundaries(...)` matches the CLI-generated geometry for identical
-assignments. Native tests must cover repeated calls, exception translation,
-sparse cell identifiers, noise, degenerate cells, and supported wheel
-installation.
+settings. The immutable CLI reference runs in a fresh one-thread process with
+its implicit seed `1`; the refactored CLI and Python path use explicit seed `1`.
+Native tests additionally verify same-seed repeated same-process calls and that
+diagnostic selection does not perturb segmentation. Multi-threaded comparisons
+are repeated when characterizing parallel variability. Verify separately that
+`boundaries(...)` matches the CLI-generated geometry for identical assignments.
+Native tests must also cover exception translation, sparse cell identifiers,
+noise, degenerate cells, and supported wheel installation.
 
 Local Dask integration tests must additionally verify that only one tile is
 admitted per worker, the worker has one Dask execution thread, the effective
@@ -1808,11 +1846,12 @@ manifest and scientific result regardless of task-completion order.
 
 ### Actual-data validation
 
-Run the untiled reference at least twice under locked parameters and execution
-settings before judging tiled quality. This measures Baysor's ordinary
-stochastic or parallel-execution variability. Tiled-versus-untiled disagreement
-must be interpreted relative to this untiled-versus-untiled baseline rather than
-against an unrealistic requirement of bitwise identity.
+Run the untiled reference at least twice under a locked native seed, parameters,
+build, and execution settings before judging tiled quality. This measures
+Baysor's ordinary stochastic or parallel-execution variability.
+Tiled-versus-untiled disagreement must be interpreted relative to this
+untiled-versus-untiled baseline rather than against an unrealistic requirement
+of bitwise identity.
 
 Compare the tiled result to the untiled UCB reference using:
 

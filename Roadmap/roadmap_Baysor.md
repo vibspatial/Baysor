@@ -80,6 +80,42 @@ binary SDK and must not expose internal BMM types merely to make them bindable.
 The request and result should be coarse enough that both frontends can use them
 without duplicating scientific orchestration or parameter resolution.
 
+### Randomness and reproducibility contract
+
+The immutable reference CLI uses fixed internal seeds but exposes no general
+seed option. N0 must not modify that oracle. Its reference is generated in a
+fresh process with one OpenMP thread, records the pinned implementation's
+implicit segmentation seed of `1` and other fixed subsystem seeds, and is
+repeated to verify semantic stability.
+
+The maintained native API will make randomness explicit after that baseline is
+captured:
+
+- `SegmentationRequest` carries a 64-bit `random_seed`, defaulting to `1` for
+  compatibility with the reference segmentation stream;
+- `run_segmentation(...)` creates run-local random state from that value rather
+  than relying on resetting mutable process-global state;
+- segmentation-affecting code receives explicit state from a versioned run-level
+  stream and named substream contract, with the default seed mapped to the N0
+  compatibility behaviour;
+- diagnostic-only operations use separate derived streams so enabling them cannot
+  consume the scientific stream and change assignments;
+- the resolved seed and effective OpenMP settings are returned in provenance;
+  and
+- the refactored CLI exposes the same setting as `--seed`, while the Python
+  frontend forwards that native setting rather than defining another seed.
+
+For the same input, options, build, platform, seed, and single-thread execution,
+repeated calls must produce the same semantic result, including repeated calls
+inside one process. A seed alone does not guarantee bitwise-identical
+multi-threaded results: the current stochastic BMM uses per-thread random streams
+with dynamic OpenMP scheduling, and parallel floating-point work may also vary in
+its final bits. Multi-threaded comparisons must therefore lock and record the
+thread configuration and characterize residual variability. Deterministic
+random draws independent of worker scheduling, for example streams derived from
+the run seed, iteration, and molecule identity, require a separately reviewed
+change and are not an N0 gate.
+
 ## Implementation sequence
 
 The native work is divided into small, reviewable slices. The mapping to the
@@ -158,11 +194,12 @@ Deliverables:
   the output serializers;
 - record one locked CLI configuration, including its input and output formats,
   prior, scale and initialization behaviour, clustering, iteration and
-  convergence settings, and OpenMP thread count;
+  convergence settings, and a one-thread OpenMP configuration;
 - run the untouched CLI at the immutable upstream commit and retain its parsed
   scientific result as the reference output;
 - record the reference commit, resolved parameters, compiler, relevant native
-  dependency versions, and effective OpenMP settings with that output; and
+  dependency versions, effective OpenMP settings, the implicit segmentation seed
+  of `1`, and other fixed subsystem seeds with that output; and
 - add a reusable semantic comparison that can later evaluate both the direct C++
   operation and the refactored CLI against the same reference.
 
@@ -182,9 +219,10 @@ partitions, counts, confidence values, or other scientific changes.
 
 The regression fixture must be small enough for routine native CI. It is not the
 deferred actual-UCB reference experiment. Because the immutable CLI exposes no
-general segmentation seed, the reference run must be repeated under locked
-settings to measure residual variability. The fixture should be chosen so that
-its meaningful assignments are stable; any accepted tolerance or semantic
+general segmentation seed, every reference attempt must start in a fresh process
+and use one OpenMP thread. The run must be repeated under those locked settings
+to measure residual variability. The fixture should be chosen so that its
+meaningful assignments are stable; any accepted tolerance or semantic
 normalization must be recorded with the fixture rather than introduced later to
 make a regression pass.
 
@@ -202,7 +240,8 @@ Deliverables:
 
 - `SegmentationRequest`, containing the molecule-input specification, optional
   prior specification, filtering, segmentation, clustering, confidence/noise,
-  requested-product, and execution options;
+  requested-product, 64-bit `random_seed` with default `1`, and execution
+  options;
 - `SegmentationResult`, owning retained molecule identity and data, cell/noise
   assignments, confidence fields, optional clusters, cell statistics,
   boundaries, counts, convergence diagnostics, resolved options, and native
@@ -210,6 +249,10 @@ Deliverables:
 - a thread-safe C++17 cancellation token with a documented ownership and
   cross-thread use contract;
 - a distinct cancelled outcome that cannot be mistaken for a complete result;
+- a run-local random-state contract covering every segmentation-affecting source
+  of randomness and separating scientific streams from diagnostic-only streams;
+- a documented, versioned derivation of any named substreams, including the
+  compatibility mapping for the default seed;
 - documented invalid-request, input/output, native-processing, and cancellation
   error behaviour; and
 - public headers that use ordinary C++ types and do not expose `argv`, CLI
@@ -219,7 +262,8 @@ Deliverables:
 Data-dependent defaults such as inferred scale or initial component count belong
 to the shared operation and must be returned as resolved values. A frontend may
 parse user input into the request, but it may not independently reproduce this
-resolution.
+resolution. The resolved random seed is likewise part of the result provenance;
+neither frontend may substitute or hide another seed.
 
 Exit criterion: the request, result, cancellation, error, and ownership contracts
 are reviewable as a coherent native API and can be compiled without the CLI.
@@ -251,6 +295,14 @@ Deliverables:
 
 - move scientific orchestration and canonical option resolution into the public
   operation without changing the underlying algorithms;
+- initialize run-local random state from `SegmentationRequest::random_seed` and
+  pass it explicitly to duplicate-point jitter, stochastic BMM assignment, and
+  every clustering step that can affect segmentation;
+- preserve the N0 one-thread stream for seed `1`, including existing fixed
+  scientific subsystem seeds where required by parity, while defining how other
+  master seeds deterministically derive those subsystem streams;
+- inventory fixed diagnostic seeds and ensure report or colour generation cannot
+  perturb the segmentation stream;
 - reuse the existing loaders, prior handling, confidence estimator, graph and
   clustering implementations, BMM, boundary estimator, and scientific
   calculations;
@@ -283,6 +335,8 @@ Deliverables:
 - test invalid requests and structured native failures;
 - test result ownership after temporary working state has been destroyed;
 - test repeated same-process calls for hidden global-state leakage;
+- test that repeated same-process calls with the same seed and one thread produce
+  the same semantic result, without one call advancing another call's stream;
 - verify that no call replaces a process-wide logger, calls `std::exit`, or
   relies on CLI-owned mutable state;
 - make `baysor_lib` consumable through `add_subdirectory(...)`, including
@@ -317,8 +371,11 @@ Deliverables:
   scientific orchestration from the CLI;
 - preserve existing supported command-line arguments, configuration behaviour,
   output naming, and default full-output behaviour;
+- expose `--seed` as the CLI spelling of the shared 64-bit `random_seed`, default
+  it to `1`, and record its resolved value in run provenance;
 - compare the refactored CLI with the immutable reference CLI on the N0 fixture
-  using the same inputs, options, OpenMP settings, and output mode; and
+  using seed `1`, the same inputs, options, one-thread OpenMP configuration, and
+  output mode; and
 - retain reference and candidate logs and resolved options as parity evidence.
 
 Parity includes retained transcript identity, cell/noise assignments, molecule
@@ -326,7 +383,10 @@ confidence, count matrices, cell statistics, resolved parameters, and Baysor
 revision. Cell identifiers and polygons are compared semantically after
 normalizing harmless relabelling, polygon orientation, and starting-vertex
 differences. Because the reference CLI has no general segmentation seed, parity
-runs should be repeated when measuring parallel variability.
+runs compare its implicit seed-`1` stream with the refactored CLI's explicit
+`--seed 1` stream in one-thread mode. Multi-threaded runs remain a separate
+repeatability characterization and must not be assumed bitwise deterministic
+merely because they use the same seed.
 
 Exit criterion: the refactored CLI is semantically equivalent to the reference
 CLI and contains no scientific orchestration path independent of
@@ -502,6 +562,10 @@ Required coverage across the sequence includes:
 - cancellation before execution, between phases, and at a safe BMM iteration
   boundary;
 - repeated same-process execution and global-state isolation;
+- same-seed one-thread repeatability in fresh and repeated same-process calls;
+- proof that diagnostic-product selection does not change scientific assignments
+  by consuming the run's scientific random stream;
+- resolved-seed and effective-thread provenance;
 - serializer consistency between direct and CLI paths;
 - semantic parity with the immutable reference CLI;
 - boundary edge cases, sparse cell identifiers, target-cell batches, and
@@ -510,7 +574,8 @@ Required coverage across the sequence includes:
 - selective-output equivalence for authoritative assignments; and
 - confidence/noise calibration fit/export/apply consistency.
 
-Tests must use explicit OpenMP settings and record them in parity evidence.
+Tests must use an explicit random seed and explicit OpenMP settings and record
+both in parity evidence.
 Bitwise identity is not required for values with legitimate parallel or geometric
 representation variability, but every normalization and tolerance must be
 scientifically justified and documented.
