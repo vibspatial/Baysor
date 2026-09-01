@@ -131,7 +131,16 @@ work.
 
 ### Native Slice N0: Establish the native baseline and regression fixture
 
-This slice makes native behavior measurable before orchestration is moved.
+This slice creates the trustworthy "before" result for the later extraction of
+`run_segmentation(...)`. The existing native tests exercise many individual
+components, but they do not by themselves prove that moving the complete
+workflow out of `cmd_run(...)` preserves the assembled scientific result. N0
+therefore adds one small end-to-end CLI fixture and an automated semantic
+comparison before orchestration is moved.
+
+N0 does not define the new public segmentation API, move code out of the CLI,
+change an algorithm or default, add Python integration, or run the actual-UCB
+reference experiment.
 
 Deliverables:
 
@@ -143,20 +152,47 @@ Deliverables:
   development environment;
 - keep individual GoogleTest cases discoverable through CTest and development
   tools;
-- select a small, deterministic-enough native regression fixture that exercises
-  molecule loading, an optional prior, parameter resolution, confidence fitting,
-  segmentation, and the output serializers; and
-- capture the reference CLI invocation, resolved parameters, native dependency
-  identity, OpenMP settings, and semantic outputs for that fixture.
+- select a small, deterministic-enough native regression input that exercises
+  molecule loading, stable transcript identity, an optional prior, parameter
+  resolution, confidence fitting, segmentation, cell products, boundaries, and
+  the output serializers;
+- record one locked CLI configuration, including its input and output formats,
+  prior, scale and initialization behaviour, clustering, iteration and
+  convergence settings, and OpenMP thread count;
+- run the untouched CLI at the immutable upstream commit and retain its parsed
+  scientific result as the reference output;
+- record the reference commit, resolved parameters, compiler, relevant native
+  dependency versions, and effective OpenMP settings with that output; and
+- add a reusable semantic comparison that can later evaluate both the direct C++
+  operation and the refactored CLI against the same reference.
+
+The reference comparison covers at least:
+
+- retained transcript identifiers and molecule rows;
+- cell/noise assignments and molecule confidence;
+- resolved scientific options;
+- count matrices and cell statistics; and
+- boundary geometry and required diagnostic products.
+
+The comparator must inspect parsed scientific content rather than require raw
+output files to be byte-identical. It may normalize harmless cell relabelling,
+polygon orientation, and polygon starting vertices, and may use explicitly
+justified numerical tolerances. It must not normalize away different molecule
+partitions, counts, confidence values, or other scientific changes.
 
 The regression fixture must be small enough for routine native CI. It is not the
-deferred actual-UCB reference experiment. The reference comparison must account
-for harmless cell relabelling and polygon representation differences while still
-checking the scientific result.
+deferred actual-UCB reference experiment. Because the immutable CLI exposes no
+general segmentation seed, the reference run must be repeated under locked
+settings to measure residual variability. The fixture should be chosen so that
+its meaningful assignments are stable; any accepted tolerance or semantic
+normalization must be recorded with the fixture rather than introduced later to
+make a regression pass.
 
 Exit criterion: a clean checkout can configure, build, and run its native tests,
-and the untouched reference CLI can produce the recorded fixture outputs under
-locked settings.
+the small input, locked configuration, reference output, and provenance are
+versioned, the untouched reference CLI can reproduce the recorded semantic
+result under those settings, and one automated comparator is ready to gate N1
+through N4.
 
 ### Native Slice N1: Define the public segmentation contracts
 
