@@ -196,7 +196,7 @@ require Git, submodule initialization, or network access during installation.
 ### Incorporating the pinned Baysor source and native extension
 
 Phase 1 will incorporate the native C++ Baysor implementation without porting its
-segmentation algorithm to Python. The production baseline is tag
+segmentation algorithm to Python. The upstream source-provenance baseline is tag
 [`cpp-0.8.3`](https://github.com/kharchenkolab/Baysor/tree/cpp-0.8.3), commit
 `d7077a7ded6f4b941915badc894f767532d39fd2`. This is an immutable revision; builds
 must not follow a moving upstream branch.
@@ -206,9 +206,10 @@ Native integration development is owned by the maintained
 branch preserves the immutable upstream baseline. Work must be performed on a
 dedicated feature branch, such as `feature/segmentation-api`, rather than by
 modifying that baseline branch. The original `kharchenkolab/Baysor` revision is
-the scientific and source-provenance baseline; a reviewed commit in the
-`vibspatial/Baysor` fork is the integration revision consumed by
-`baysor-python`.
+the upstream ancestry and source-provenance baseline. N0 records the current
+feature branch's exact pre-extraction revision as its behavioural baseline; a
+later reviewed commit in the `vibspatial/Baysor` fork is the integration revision
+consumed by `baysor-python`.
 
 The development checkout should use this layout:
 
@@ -1301,7 +1302,10 @@ Deliverables:
 - preserve the immutable `cpp` baseline at upstream commit
   `d7077a7ded6f4b941915badc894f767532d39fd2` and perform the extraction on a
   dedicated feature branch;
-- establish a small native regression fixture before changing orchestration;
+- establish a small native regression fixture before changing orchestration,
+  recording the exact committed pre-extraction revision of the current feature
+  branch as its behavioural baseline; the upstream commit remains ancestry and
+  source provenance rather than a second regression oracle;
 - keep the entry-point extraction as a small, auditable commit series that can
   be proposed upstream;
 - define `SegmentationRequest`, `SegmentationResult`, and
@@ -1418,9 +1422,9 @@ outcome without a complete `SegmentationResult`; completed serializers must not
 run for that attempt. Process termination remains a later supervisor fallback,
 not the primary native cancellation mechanism.
 
-Randomness likewise has one shared native implementation. The immutable N0 CLI
-reference remains untouched and is captured in a fresh process with one OpenMP
-thread; its implicit segmentation seed is `1`. The maintained operation creates
+Randomness likewise has one shared native implementation. The recorded N0
+pre-extraction CLI is captured in a fresh process with one OpenMP thread; its
+implicit segmentation seed is `1`. The maintained operation creates
 run-local random state from `SegmentationRequest::random_seed` rather than
 resetting mutable process-global state. Scientific and diagnostic-only random
 streams are separated so requesting a report cannot change segmentation. The
@@ -1600,12 +1604,12 @@ every supported CPython minor version and has a clean strict Stable-ABI audit.
 
 All parity paths must use the exact same input files, pinned Baysor revision,
 configuration, OpenMP thread count, output mode, and controllable execution
-settings. The immutable N0 CLI does not expose a seed flag and is therefore run
-as a fresh one-thread process using its implicit seed of `1`. The shared native
-operation, refactored CLI, and Python API expose that same seed explicitly;
-baseline parity uses `random_seed=1`. Multi-threaded comparisons lock the thread
-count and are repeated to characterize scheduling and floating-point variability
-rather than assuming that a seed guarantees bitwise identity.
+settings. The recorded N0 pre-extraction CLI does not expose a seed flag and is
+therefore run as a fresh one-thread process using its implicit seed of `1`. The
+shared native operation, refactored CLI, and Python API expose that same seed
+explicitly; baseline parity uses `random_seed=1`. Multi-threaded comparisons lock
+the thread count and are repeated to characterize scheduling and floating-point
+variability rather than assuming that a seed guarantees bitwise identity.
 
 Comparison includes retained transcript identity, cell/noise assignments,
 molecule confidence, count matrices, cell statistics, resolved parameters, and
@@ -1822,8 +1826,9 @@ tile boundary.
 
 At the `baysor_python` layer, verify that `segment(...)` matches the direct pinned
 CLI for identical inputs, parameters, output mode, and controllable execution
-settings. The immutable CLI reference runs in a fresh one-thread process with
-its implicit seed `1`; the refactored CLI and Python path use explicit seed `1`.
+settings. The recorded pre-extraction CLI reference runs in a fresh one-thread
+process with its implicit seed `1`; the refactored CLI and Python path use
+explicit seed `1`.
 Native tests additionally verify same-seed repeated same-process calls and that
 diagnostic selection does not perturb segmentation. Multi-threaded comparisons
 are repeated when characterizing parallel variability. Verify separately that

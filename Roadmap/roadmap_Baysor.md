@@ -32,7 +32,7 @@ This repository owns:
 - reusable native serializers and reporting facilities over the structured
   result;
 - an embeddable CMake library target with no Python dependency;
-- the CLI frontend and its parity with the immutable upstream reference;
+- the CLI frontend and its parity with the recorded pre-extraction reference;
 - a reusable native boundary-estimation operation;
 - stable transcript-identity preservation in native results and Parquet output;
 - optional native output selection for tiled workloads;
@@ -82,11 +82,13 @@ without duplicating scientific orchestration or parameter resolution.
 
 ### Randomness and reproducibility contract
 
-The immutable reference CLI uses fixed internal seeds but exposes no general
-seed option. N0 must not modify that oracle. Its reference is generated in a
-fresh process with one OpenMP thread, records the pinned implementation's
-implicit segmentation seed of `1` and other fixed subsystem seeds, and is
-repeated to verify semantic stability.
+The current feature branch, before extraction begins, is the behavioural
+starting point. N0 records the exact committed source revision used to build the
+reference CLI; the historical upstream commit remains source provenance rather
+than a second behavioural oracle. The reference CLI uses fixed internal seeds
+but exposes no general seed option. Its reference is generated in a fresh
+process with one OpenMP thread, records the implementation's implicit
+segmentation seed of `1`, and is repeated to verify semantic stability.
 
 The maintained native API will make randomness explicit after that baseline is
 captured:
@@ -158,7 +160,7 @@ GoogleTest discovery are in place. The next product work is Native Slice N0:
 
 1. verify the complete native test suite from a clean configure and build;
 2. select the small segmentation regression input and locked CLI configuration;
-3. record the immutable reference CLI's semantic outputs; and
+3. record the current pre-extraction CLI's semantic outputs; and
 4. review that fixture as the behavioural gate for N1 through N4.
 
 Extraction of `run_segmentation(...)` begins only after this reference is
@@ -180,10 +182,13 @@ reference experiment.
 
 Deliverables:
 
-- preserve the immutable upstream `cpp-0.8.3` baseline at commit
-  `d7077a7ded6f4b941915badc894f767532d39fd2`;
-- perform maintained work on a dedicated feature branch rather than changing the
-  baseline branch;
+- record the exact committed pre-extraction revision of the current feature
+  branch as the behavioural baseline; the upstream `cpp-0.8.3` commit remains
+  ancestry and source provenance, not a separate N0 oracle;
+- use that revision directly without reconstructing a second historical build or
+  maintaining a separate baseline worktree; all native behaviour already
+  committed there is accepted as the baseline without a separate deviation
+  catalogue;
 - retain the reproducible CMake test preset and documented user-space macOS
   development environment;
 - keep individual GoogleTest cases discoverable through CTest and development
@@ -191,17 +196,19 @@ Deliverables:
 - select a small, deterministic-enough native regression input that exercises
   molecule loading, stable transcript identity, an optional prior, parameter
   resolution, confidence fitting, segmentation, cell products, boundaries, and
-  the output serializers;
+  the legacy output serializers;
 - record one locked CLI configuration, including its input and output formats,
   prior, scale and initialization behaviour, clustering, iteration and
-  convergence settings, and a one-thread OpenMP configuration;
-- run the untouched CLI at the immutable upstream commit and retain its parsed
-  scientific result as the reference output;
+  convergence settings, and a one-thread OpenMP configuration; use the legacy
+  output style so the segmented-molecule CSV retains `transcript_id`;
+- run the recorded pre-extraction CLI and retain its parsed scientific result as
+  the reference output;
 - record the reference commit, resolved parameters, compiler, relevant native
   dependency versions, effective OpenMP settings, the implicit segmentation seed
-  of `1`, and other fixed subsystem seeds with that output; and
-- add a reusable semantic comparison that can later evaluate both the direct C++
-  operation and the refactored CLI against the same reference.
+  of `1`, and the locked configuration with that output; and
+- add one focused automated semantic comparison that can later evaluate both the
+  direct C++ operation and the refactored CLI against the same reference. It does
+  not need to be a general-purpose comparison framework.
 
 The reference comparison covers at least:
 
@@ -209,7 +216,7 @@ The reference comparison covers at least:
 - cell/noise assignments and molecule confidence;
 - resolved scientific options;
 - count matrices and cell statistics; and
-- boundary geometry and required diagnostic products.
+- boundary geometry.
 
 The comparator must inspect parsed scientific content rather than require raw
 output files to be byte-identical. It may normalize harmless cell relabelling,
@@ -218,18 +225,19 @@ justified numerical tolerances. It must not normalize away different molecule
 partitions, counts, confidence values, or other scientific changes.
 
 The regression fixture must be small enough for routine native CI. It is not the
-deferred actual-UCB reference experiment. Because the immutable CLI exposes no
-general segmentation seed, every reference attempt must start in a fresh process
-and use one OpenMP thread. The run must be repeated under those locked settings
-to measure residual variability. The fixture should be chosen so that its
-meaningful assignments are stable; any accepted tolerance or semantic
+deferred actual-UCB reference experiment. Because the pre-extraction CLI exposes
+no general segmentation seed, each reference attempt starts in a fresh process
+and uses one OpenMP thread. Repeating the small run under those locked settings
+is sufficient to confirm semantic stability. The fixture should be chosen so
+that its meaningful assignments are stable; any accepted tolerance or semantic
 normalization must be recorded with the fixture rather than introduced later to
-make a regression pass.
+make a regression pass. Stable transcript identity is validated through the
+legacy segmented-molecule CSV; adding it to Parquet remains Native Slice N6.
 
 Exit criterion: a clean checkout can configure, build, and run its native tests,
 the small input, locked configuration, reference output, and provenance are
-versioned, the untouched reference CLI can reproduce the recorded semantic
-result under those settings, and one automated comparator is ready to gate N1
+versioned, the recorded pre-extraction CLI can reproduce the semantic result
+under those settings, and one focused automated comparator is ready to gate N1
 through N4.
 
 ### Native Slice N1: Define the public segmentation contracts
@@ -373,20 +381,20 @@ Deliverables:
   output naming, and default full-output behaviour;
 - expose `--seed` as the CLI spelling of the shared 64-bit `random_seed`, default
   it to `1`, and record its resolved value in run provenance;
-- compare the refactored CLI with the immutable reference CLI on the N0 fixture
-  using seed `1`, the same inputs, options, one-thread OpenMP configuration, and
-  output mode; and
+- compare the refactored CLI with the recorded pre-extraction CLI on the N0
+  fixture using seed `1`, the same inputs, options, one-thread OpenMP
+  configuration, and output mode; and
 - retain reference and candidate logs and resolved options as parity evidence.
 
 Parity includes retained transcript identity, cell/noise assignments, molecule
 confidence, count matrices, cell statistics, resolved parameters, and Baysor
 revision. Cell identifiers and polygons are compared semantically after
 normalizing harmless relabelling, polygon orientation, and starting-vertex
-differences. Because the reference CLI has no general segmentation seed, parity
-runs compare its implicit seed-`1` stream with the refactored CLI's explicit
-`--seed 1` stream in one-thread mode. Multi-threaded runs remain a separate
-repeatability characterization and must not be assumed bitwise deterministic
-merely because they use the same seed.
+differences. Because the pre-extraction CLI has no general segmentation seed,
+parity runs compare its implicit seed-`1` stream with the refactored CLI's
+explicit `--seed 1` stream in one-thread mode. Multi-threaded runs remain a
+separate repeatability characterization and must not be assumed bitwise
+deterministic merely because they use the same seed.
 
 Exit criterion: the refactored CLI is semantically equivalent to the reference
 CLI and contains no scientific orchestration path independent of
@@ -549,7 +557,7 @@ made and tested here, followed by a new commit-based handoff.
 ## Native test strategy
 
 Each slice runs only the focused native tests needed for its change during
-development. The complete native suite and reference CLI parity fixture are
+development. The complete native suite and pre-extraction CLI parity fixture are
 release and handoff gates.
 
 Required coverage across the sequence includes:
@@ -567,7 +575,7 @@ Required coverage across the sequence includes:
   by consuming the run's scientific random stream;
 - resolved-seed and effective-thread provenance;
 - serializer consistency between direct and CLI paths;
-- semantic parity with the immutable reference CLI;
+- semantic parity with the recorded pre-extraction CLI;
 - boundary edge cases, sparse cell identifiers, target-cell batches, and
   thread-count stability;
 - stable transcript-ID round trips through filtering and Parquet;

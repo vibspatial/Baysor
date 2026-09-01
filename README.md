@@ -79,6 +79,9 @@ intentionally broad for package-manager builds:
 | nlohmann_json | Not pinned; 3.7.3 is known to work |
 | libtiff | Not pinned; 4.1.0 is known to work |
 
+The supported-version table is intentionally broad. The reproducible macOS
+development environment below uses Eigen 5.0.1.
+
 Several header-only dependencies are fetched automatically by CMake with pinned
 tags: `aarand v1.0.2`, `CppKmeans v3.1.1`, `subpar v0.3.1`,
 `knncolle v2.3.0`, `CppIrlba v2.0.2`, and `umappp v2.0.1`.
@@ -134,7 +137,7 @@ Create the development environment from conda-forge:
   cmake \
   ninja \
   pkg-config \
-  "eigen=3.4.*" \
+  "eigen=5.0.1" \
   spdlog \
   cgal-cpp \
   "libarrow=20.*" \
@@ -242,11 +245,6 @@ micromamba install \
 Then repeat the `cmake --fresh` command. If CTest says that `baysor_tests`
 cannot be found, inspect the preceding build output: that message means
 compilation failed before the test executable was created.
-
-On some macOS toolchains, the current source reaches 113 of 114 tests and only
-`NoiseEstimation.JuliaParityWithPriorFloor` fails with a computed standard
-deviation around `4.9e-9` versus a `1e-9` assertion. That is a source-level
-floating-point stability issue rather than a development-environment failure.
 
 ### Configure, build, and install
 
