@@ -156,17 +156,24 @@ double wmean(const double* values, const double* weights, int n) {
 }
 
 std::pair<double, double> wmean_std(const double* values, const double* weights, int n) {
-    double w = 0.0, wx = 0.0, wxx = 0.0;
+    double w = 0.0, wx = 0.0;
     for (int i = 0; i < n; ++i) {
         double wi = weights[i];
         double xi = values[i];
         w += wi;
         wx += wi * xi;
-        wxx += wi * xi * xi;
     }
     if (w <= 0.0) return {0.0, 0.0};
+
     double m = wx / w;
-    double s2 = (wxx / w) - m * m;
+    // Compute variance from deviations in a second pass to avoid catastrophic
+    // cancellation in E[x^2] - E[x]^2 for nearly constant values.
+    double weighted_squared_deviation = 0.0;
+    for (int i = 0; i < n; ++i) {
+        double deviation = values[i] - m;
+        weighted_squared_deviation += weights[i] * deviation * deviation;
+    }
+    double s2 = weighted_squared_deviation / w;
     return {m, std::sqrt(std::max(s2, 0.0))};
 }
 
