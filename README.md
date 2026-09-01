@@ -74,7 +74,7 @@ intentionally broad for package-manager builds:
 | OpenMP | C++ OpenMP target; GCC OpenMP 4.5 is known to work |
 | spdlog | Not pinned; 1.5.0 is known to work |
 | CGAL | Not pinned; 5.0.2 is known to work |
-| Arrow / Parquet | Not pinned; 19.0.1 is known to work; Arrow must include compute, CSV, and Parquet support |
+| Arrow / Parquet | `>= 19`; 19.0.1 and 20.0.0 are known to build; Arrow must include compute, CSV, and Parquet support |
 | HDF5 | Not pinned; 1.10.x is known to work |
 | nlohmann_json | Not pinned; 3.7.3 is known to work |
 | libtiff | Not pinned; 4.1.0 is known to work |
@@ -82,6 +82,130 @@ intentionally broad for package-manager builds:
 Several header-only dependencies are fetched automatically by CMake with pinned
 tags: `aarand v1.0.2`, `CppKmeans v3.1.1`, `subpar v0.3.1`,
 `knncolle v2.3.0`, `CppIrlba v2.0.2`, and `umappp v2.0.1`.
+
+### macOS development environment with Micromamba
+
+The following setup is intended for Apple Silicon macOS development when
+Homebrew or administrator access is unavailable. It installs Micromamba and all
+native dependencies under `~/Applications`; it does not write to system
+directories. On an Intel Mac, replace `osx-arm64` with `osx-64` in the download
+URL.
+
+First, verify that the Apple command-line developer tools are present:
+
+```bash
+xcode-select -p
+```
+
+If that command reports that no developer tools are installed, start Apple's
+user-level installer and complete the displayed installation:
+
+```bash
+xcode-select --install
+```
+
+Choose the user-space installation locations. These exports apply only to the
+current shell; repeat them in a new shell or add them to the appropriate shell
+configuration file.
+
+```bash
+export BAYSOR_TOOLS_DIR="${HOME}/Applications"
+export BAYSOR_MICROMAMBA="${BAYSOR_TOOLS_DIR}/micromamba/bin/micromamba"
+export MAMBA_ROOT_PREFIX="${BAYSOR_TOOLS_DIR}/micromamba-root"
+export BAYSOR_DEV_PREFIX="${BAYSOR_TOOLS_DIR}/baysor-dev"
+```
+
+Download the official Micromamba binary:
+
+```bash
+mkdir -p "${BAYSOR_TOOLS_DIR}/micromamba"
+curl -Ls https://micro.mamba.pm/api/micromamba/osx-arm64/latest \
+  | tar -xj -C "${BAYSOR_TOOLS_DIR}/micromamba" bin/micromamba
+"${BAYSOR_MICROMAMBA}" --version
+```
+
+Create the development environment from conda-forge:
+
+```bash
+"${BAYSOR_MICROMAMBA}" create -y \
+  --prefix "${BAYSOR_DEV_PREFIX}" \
+  --channel conda-forge \
+  --override-channels \
+  cmake \
+  ninja \
+  pkg-config \
+  "eigen=3.4.*" \
+  spdlog \
+  cgal-cpp \
+  "libarrow=20.*" \
+  "libparquet=20.*" \
+  "hdf5=1.14.*" \
+  nlohmann_json \
+  libtiff \
+  llvm-openmp \
+  gtest
+```
+
+The explicit Arrow and Parquet packages are important. Current conda-forge C++
+packages are named `libarrow` and `libparquet`; do not substitute the legacy
+`arrow-cpp` package, which may resolve to Arrow 13 and is incompatible with the
+current Baysor source.
+
+Activate the environment in the current Zsh session:
+
+```bash
+eval "$("${BAYSOR_MICROMAMBA}" shell hook -s zsh)"
+micromamba activate "${BAYSOR_DEV_PREFIX}"
+```
+
+Verify the relevant tools and libraries before configuring Baysor:
+
+```bash
+cmake --version
+ninja --version
+micromamba list libarrow
+micromamba list libparquet
+echo "${CONDA_PREFIX}"
+```
+
+From the Baysor repository root, configure a clean optimized test build, compile
+the CLI and unit-test targets, and run the tests:
+
+```bash
+cmake --fresh --preset tests \
+  -DCMAKE_PREFIX_PATH="${CONDA_PREFIX}" \
+  -DOpenMP_ROOT="${CONDA_PREFIX}"
+
+cmake --build --preset tests --clean-first
+ctest --preset tests
+```
+
+During environment creation, Micromamba warns that conda packages may contain
+installation scripts. This is a security notice rather than an installation
+failure; continue only if the configured package source (`conda-forge` above) is
+trusted.
+
+If configuration reports Parquet 13, or compilation fails around
+`GetRecordBatchReader` or `AddKeyValueMetadata`, the environment contains an
+incompatible Arrow installation. Upgrade an existing environment explicitly:
+
+```bash
+micromamba install \
+  --prefix "${BAYSOR_DEV_PREFIX}" \
+  --channel conda-forge \
+  --override-channels \
+  "libarrow=20.*" \
+  "libparquet=20.*"
+```
+
+Then repeat the `cmake --fresh` command. If CTest says that `baysor_tests`
+cannot be found, inspect the preceding build output: that message means
+compilation failed before the test executable was created.
+
+On some macOS toolchains, the current source reaches 113 of 114 tests and only
+`NoiseEstimation.JuliaParityWithPriorFloor` fails with a computed standard
+deviation around `4.9e-9` versus a `1e-9` assertion. That is a source-level
+floating-point stability issue rather than a development-environment failure.
 
 ### Configure, build, and install
 
