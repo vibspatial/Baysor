@@ -303,6 +303,7 @@ if(BAYSOR_WITH_TESTS)
         TARGET GTest::gtest_main
         INSTALL_HINT "Ubuntu: sudo apt-get install libgtest-dev\nmacOS: brew install googletest\nvcpkg: enable the 'tests' manifest feature or install gtest"
     )
+    include(GoogleTest)
 
     add_executable(baysor_tests
         tests/test_main.cpp
@@ -311,5 +312,8 @@ if(BAYSOR_WITH_TESTS)
     if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
         target_compile_options(baysor_tests PRIVATE -Wno-stringop-overflow)
     endif()
-    add_test(NAME baysor_tests COMMAND baysor_tests)
+    gtest_discover_tests(
+        baysor_tests
+        DISCOVERY_MODE POST_BUILD
+    )
 endif()
