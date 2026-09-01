@@ -207,6 +207,20 @@ cmake --build --preset tests --clean-first
 ctest --preset tests
 ```
 
+After this initial configuration and clean build, the regular development loop
+is simply:
+
+```bash
+cmake --build --preset tests
+ctest --preset tests
+```
+
+The build is incremental, so only targets affected by source changes are
+recompiled. Re-run the `cmake --fresh --preset tests` configuration when native
+dependencies, the Micromamba environment, CMake options, or material build
+configuration have changed, or when intentionally discarding a stale CMake
+cache.
+
 During environment creation, Micromamba warns that conda packages may contain
 installation scripts. This is a security notice rather than an installation
 failure; continue only if the configured package source (`conda-forge` above) is
