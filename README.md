@@ -158,6 +158,33 @@ eval "$("${BAYSOR_MICROMAMBA}" shell hook -s zsh)"
 micromamba activate "${BAYSOR_DEV_PREFIX}"
 ```
 
+To make the paths and Micromamba shell integration available in future Zsh
+sessions, add the following block to `~/.zshrc`:
+
+```zsh
+export BAYSOR_TOOLS_DIR="${HOME}/Applications"
+export BAYSOR_MICROMAMBA="${BAYSOR_TOOLS_DIR}/micromamba/bin/micromamba"
+export MAMBA_ROOT_PREFIX="${BAYSOR_TOOLS_DIR}/micromamba-root"
+export BAYSOR_DEV_PREFIX="${BAYSOR_TOOLS_DIR}/baysor-dev"
+
+if [[ -x "${BAYSOR_MICROMAMBA}" ]]; then
+  eval "$("${BAYSOR_MICROMAMBA}" shell hook -s zsh)"
+fi
+```
+
+The executable check prevents shell-startup errors if the Micromamba binary is
+unavailable. The hook enables `micromamba activate` and `micromamba deactivate`;
+it does not activate the Baysor environment automatically. Reload the file and
+activate the environment when starting a Baysor development session:
+
+```bash
+source ~/.zshrc
+micromamba activate "${BAYSOR_DEV_PREFIX}"
+```
+
+Do not add the activation command itself to `~/.zshrc` unless every new terminal
+should start inside the Baysor development environment.
+
 Verify the relevant tools and libraries before configuring Baysor:
 
 ```bash
