@@ -242,6 +242,10 @@ source-distribution installation may clone repositories at build time.
 
 The repository boundary follows the product architecture:
 
+The native implementation slices owned by this repository are maintained in
+[roadmap_Baysor.md](roadmap_Baysor.md). This section retains the cross-repository
+ownership and handoff contract.
+
 > `vibspatial/Baysor` owns the reusable segmentation engine;
 > `baysor-python` owns the Python binding, packaging, and higher-level Python
 > integration.
