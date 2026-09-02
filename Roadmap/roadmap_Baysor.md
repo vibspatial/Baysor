@@ -155,19 +155,21 @@ updates.
 
 ## Immediate next work
 
-The repository development environment, CMake test preset, and individual
-GoogleTest discovery are in place. The next product work is Native Slice N0:
+Native Slice N0 is implemented and verified. It records commit
+`f46a1e1dce1606d0ea644f4f8f1cf682597ba65c` as the pre-extraction behavioural
+baseline, uses the small legacy-output fixture under
+`tests/fixtures/native_baseline`, and adds one CTest-discovered semantic CLI
+regression. The N0 verification build passed all 115 tests then present,
+including that regression.
 
-1. verify the complete native test suite from a clean configure and build;
-2. select the small segmentation regression input and locked CLI configuration;
-3. record the current pre-extraction CLI's semantic outputs; and
-4. review that fixture as the behavioural gate for N1 through N4.
+The next product work is Native Slice N1: define the public segmentation
+contracts before moving orchestration out of `cmd_run(...)`.
 
-Extraction of `run_segmentation(...)` begins only after this reference is
-reproducible. The deferred actual-UCB experiment is not a prerequisite for this
-work.
+The deferred actual-UCB experiment remains outside this sequence.
 
 ### Native Slice N0: Establish the native baseline and regression fixture
+
+Implementation status: complete as of 2026-09-01.
 
 This slice creates the trustworthy "before" result for the later extraction of
 `run_segmentation(...)`. The existing native tests exercise many individual
@@ -203,9 +205,11 @@ Deliverables:
   output style so the segmented-molecule CSV retains `transcript_id`;
 - run the recorded pre-extraction CLI and retain its parsed scientific result as
   the reference output;
-- record the reference commit, resolved parameters, compiler, relevant native
-  dependency versions, effective OpenMP settings, the implicit segmentation seed
-  of `1`, and the locked configuration with that output; and
+- record the reference commit, resolved parameters, effective OpenMP settings,
+  the implicit segmentation seed of `1`, and the locked configuration and
+  generation command with that output; compiler and dependency inventories
+  belong to CI and release-build provenance rather than this portable fixture;
+  and
 - add one focused automated semantic comparison that can later evaluate both the
   direct C++ operation and the refactored CLI against the same reference. It does
   not need to be a general-purpose comparison framework.
@@ -235,10 +239,10 @@ make a regression pass. Stable transcript identity is validated through the
 legacy segmented-molecule CSV; adding it to Parquet remains Native Slice N6.
 
 Exit criterion: a clean checkout can configure, build, and run its native tests,
-the small input, locked configuration, reference output, and provenance are
-versioned, the recorded pre-extraction CLI can reproduce the semantic result
-under those settings, and one focused automated comparator is ready to gate N1
-through N4.
+the small input, locked configuration, reference output, and portable generation
+recipe are versioned, the recorded pre-extraction CLI can reproduce the semantic
+result under those settings, and one focused automated comparator is ready to
+gate N1 through N4.
 
 ### Native Slice N1: Define the public segmentation contracts
 

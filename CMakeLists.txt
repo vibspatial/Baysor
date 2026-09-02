@@ -307,8 +307,15 @@ if(BAYSOR_WITH_TESTS)
 
     add_executable(baysor_tests
         tests/test_main.cpp
+        tests/native_baseline_test.cpp
     )
+    add_dependencies(baysor_tests baysor)
     target_link_libraries(baysor_tests PRIVATE baysor_lib GTest::gtest_main)
+    target_compile_definitions(baysor_tests PRIVATE
+        BAYSOR_TEST_CLI_PATH="$<TARGET_FILE:baysor>"
+        BAYSOR_TEST_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/native_baseline"
+        BAYSOR_TEST_CMAKE_COMMAND="${CMAKE_COMMAND}"
+    )
     if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
         target_compile_options(baysor_tests PRIVATE -Wno-stringop-overflow)
     endif()
