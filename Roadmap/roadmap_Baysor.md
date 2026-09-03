@@ -246,7 +246,112 @@ gate N1 through N4.
 
 ### Native Slice N1: Define the public segmentation contracts
 
-Define the source-level API before moving implementation out of the CLI.
+Define the stable source-level API that the Baysor CLI and the future nanobind
+module will share. This slice defines a coherent, compilable native boundary;
+it does not yet move the scientific workflow out of `cmd_run(...)` or change an
+algorithm. That orchestration extraction belongs to N2.
+
+The current `cmd_run(...)` accepts a mixture of scientific configuration, input
+and output paths, CLI presentation choices, and serialization choices. It runs
+the complete workflow, writes files immediately, and reduces the outcome to an
+integer exit code. Its local lambda named `run_segmentation` is only a
+dimension-dispatch closure over captured CLI state; it is not an independently
+callable library operation. N1 replaces this implicit interface with an explicit
+contract, conceptually:
+
+```cpp
+SegmentationOutcome run_segmentation(
+    const SegmentationRequest& request,
+    const CancellationToken& cancellation
+);
+```
+
+N1 defines the participating types and the declaration of this operation. N2
+implements it by moving the existing orchestration behind the new boundary.
+
+#### Request contract
+
+`SegmentationRequest` is an owning, typed description of one run. It contains:
+
+- a path-oriented molecule-input specification, including column mapping and
+  filtering options;
+- an optional prior-segmentation specification;
+- segmentation, clustering, and confidence/noise options;
+- an explicit requested-product selection, defaulting to the CLI-compatible
+  full scientific result;
+- a 64-bit `random_seed`, defaulting to `1`; and
+- execution settings, including the requested native thread configuration.
+
+The request may compose or refine the existing native option structures, but it
+must also own the run inputs that are currently passed separately to
+`cmd_run(...)`. The supported initial contract remains path-oriented: C++ loads
+the prepared CSV or Parquet input. An in-memory Python-array contract is not part
+of this slice.
+
+The request records unresolved user intent where resolution requires the loaded
+data. For example, an automatically selected scale or initial component count
+is not independently calculated by the CLI or Python frontend. The shared
+operation resolves it once and returns the effective value in the result.
+
+#### Result and ownership contract
+
+`SegmentationResult` owns the scientific products needed by the native
+serializers and the future binding:
+
+- retained molecule data and stable source transcript identity;
+- cell/noise assignments, molecule confidence, and assignment confidence;
+- optional molecule-cluster assignments;
+- stable cell identifiers and cell statistics;
+- 2D boundaries and, where applicable, 3D boundary stacks;
+- cell-by-gene counts;
+- convergence and other requested diagnostic data;
+- resolved options and the actual produced-product set; and
+- native run provenance, including the resolved seed and effective thread
+  settings.
+
+These values use normal C++ ownership and move semantics. The result must not
+contain references, pointers, or views into a destroyed `BmmData` or another
+temporary working object. It also does not encode output directories, filenames,
+console presentation, or process exit policy. Serialization operates separately
+over a completed result.
+
+The requested-product field is established here with a backward-compatible
+full-result default. N7 later makes selective materialization a measured runtime
+and memory optimization, so callers can omit unused boundaries, matrices, or
+reports without changing assignments.
+
+#### Cancellation contract
+
+N1 introduces a small C++17-compatible cancellation facility backed by
+thread-safe shared state. Its documented contract must state:
+
+- how the caller creates and owns the cancellation state;
+- that a token may safely be observed by the segmentation thread while another
+  thread requests cancellation;
+- that cancellation is cooperative rather than forced thread termination; and
+- that cancellation produces a distinct outcome and never a partially valid
+  `SegmentationResult`.
+
+The outcome type must therefore make success and cancellation structurally
+distinct, for example through a variant of `SegmentationResult` and a dedicated
+`SegmentationCancelled` value. N2 adds the safe phase and BMM-iteration
+checkpoints that act on this contract.
+
+#### Randomness and errors
+
+N1 defines one run-local randomness contract. The request supplies a master
+64-bit seed, scientific substreams and diagnostic-only substreams are separate,
+and any named-substream derivation is documented and versioned. Seed `1` maps to
+the N0 one-thread compatibility behaviour. The resolved seed, substream-contract
+version, and effective native thread settings are retained in result provenance.
+N2 performs the mechanical work of passing this state through every stochastic
+scientific operation.
+
+The public API also documents distinct behaviour for invalid requests, molecule
+or prior input failures, native-processing failures, serializer/output failures,
+and cancellation. The library preserves structured native outcomes; the CLI may
+later translate them into messages and exit codes, and nanobind may translate
+them into documented Python exceptions.
 
 Deliverables:
 
@@ -271,14 +376,17 @@ Deliverables:
   aliases, process exit policy, presentation strings, Python objects, or internal
   BMM ownership.
 
-Data-dependent defaults such as inferred scale or initial component count belong
-to the shared operation and must be returned as resolved values. A frontend may
-parse user input into the request, but it may not independently reproduce this
-resolution. The resolved random seed is likewise part of the result provenance;
-neither frontend may substitute or hide another seed.
+Focused contract tests compile and link only against `baysor_lib`. They verify
+that a request can be constructed without CLI code, its defaults include seed
+`1`, result values have safe owning/move semantics, cancellation can be requested
+from another thread, and a cancelled outcome cannot be treated as a successful
+result. They do not duplicate the N0 scientific regression or prematurely test
+the N2 implementation.
 
 Exit criterion: the request, result, cancellation, error, and ownership contracts
-are reviewable as a coherent native API and can be compiled without the CLI.
+are documented and reviewable as a coherent native API; their focused tests can
+compile and link without the CLI executable; and the existing CLI scientific
+path remains unchanged pending N2.
 
 ### Native Slice N2: Extract the scientific orchestration
 
