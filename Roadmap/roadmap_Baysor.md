@@ -522,6 +522,38 @@ path remains unchanged pending N2.
 Implement `run_segmentation(request, cancellation)` in `baysor_lib` by moving the
 existing orchestration out of `cmd_run(...)`.
 
+#### Starting point and target boundary
+
+At the start of N2, [`src/segmentation/segmentation.cpp`](../src/segmentation/segmentation.cpp)
+implements the seed-derivation and structured-error support established by N1,
+but it does not define the public run operation. The assembled scientific
+workflow still lives inside
+[`cmd_run(...)`](../src/cli/main.cpp), where input preparation, parameter
+resolution, segmentation, product construction, file writing, logging, and exit
+codes are interleaved.
+
+N2 turns the N1 declaration into the directly callable native engine:
+
+```text
+SegmentationRequest + CancellationToken
+                    |
+                    v
+        baysor::run_segmentation(...)
+                    |
+                    v
+          SegmentationOutcome
+             /             \
+            v               v
+SegmentationResult   SegmentationCancelled
+```
+
+The operation accepts the input path and typed scientific intent through
+`SegmentationRequest`. It does not accept an output directory, serialization
+format, filename, CLI command, Python object, logger configuration, or process
+exit policy. It copies request options into run-local state because the public
+request is const, performs canonical data-dependent resolution there, and
+returns the effective values through `SegmentationResult::resolved_options`.
+
 The shared operation owns this sequence:
 
 ```text
@@ -539,6 +571,95 @@ derive requested assignments, statistics, boundaries, counts, and diagnostics
         |
 return an owned SegmentationResult
 ```
+
+Concretely, N2 moves or extracts the following orchestration from
+`cmd_run(...)`:
+
+1. validate the typed molecule, prior, segmentation, neighborhood-composition,
+   requested-product, seed, and execution settings;
+2. load and filter the prepared CSV or Parquet molecule table and load the
+   optional prior;
+3. infer prior-derived scale, initial cell count, and other values that require
+   the loaded molecule cloud;
+4. estimate molecule confidence/noise, build the molecule graph, and perform
+   optional MRF, Louvain, or Leiden molecule clustering;
+5. dispatch to the existing `initialize_bmm_data<2>`/`<3>` and `bmm<2>`/`<3>`
+   implementations according to the loaded dimensionality; and
+6. derive the requested scientific products and move their durable values into
+   one owning `SegmentationResult`.
+
+The existing loaders, prior code, confidence estimator, graph construction,
+clustering implementations, BMM, boundary estimator, and scientific calculations
+remain authoritative. N2 changes their coordination and ownership, not their
+mathematics, defaults, or update order.
+
+#### Result materialization and serialization boundary
+
+The current CLI calculates cell statistics, boundaries, and the count matrix
+next to the code that immediately writes those products. N2 separates
+calculation from representation on disk:
+
+```text
+BmmData and temporary working objects
+                    |
+                    | copy or move durable scientific values
+                    v
+          owning SegmentationResult
+                    |
+                    | separate reusable serializers
+                    v
+       CSV / Parquet / geometry / matrix artifacts
+```
+
+The returned result contains retained molecule data, cell/noise assignments,
+assignment confidence, optional molecule clusters and neighborhood-composition
+colours, stable cell identifiers, cell statistics, 2D or 3D boundaries, the
+cell-by-gene count matrix, report-neutral diagnostics, resolved options,
+produced-product flags, and native provenance. No pointer, reference, or view
+into `BmmData`, a clustering model, a report object, or CLI-owned state may
+escape the operation.
+
+Native serializers become reusable functions over a completed result. The
+scientific operation itself writes no output artifacts. HTML generation and
+other presentation code consume report-neutral result data outside the run
+operation. The default request still produces the complete scientific result;
+N7, rather than N2, is responsible for proving and optimizing selective
+materialization.
+
+#### Run-local randomness
+
+N2 must replace the current mixture of process-global and hard-coded random
+state with one run-local context derived from `SegmentationRequest::random_seed`.
+The relevant paths include duplicate-point jitter, stochastic BMM assignment,
+molecule clustering, and neighborhood-composition or diagnostic embeddings.
+
+The default seed `1` preserves the N0 single-thread scientific stream. Other
+master seeds use the versioned substream derivation established by N1. Scientific
+and diagnostic-only streams remain separate, so requesting a diagnostic or
+colour product cannot consume random values that would otherwise affect cell
+assignments. Any internal function-signature changes needed to pass a generator
+or derived seed are part of N2; the random source must not become another public
+Python or CLI contract.
+
+The result records the master seed, derived substreams, substream-contract
+version, and effective native thread setting in provenance. Same-seed
+single-thread repeatability, repeated-call isolation, and multithreaded
+characterization are hardened and tested in N3.
+
+#### Errors, cancellation, and CLI overlap
+
+Scientific validation or execution failures that are currently reduced to a log
+message and integer return code become categorized `SegmentationError`
+exceptions. Cooperative cancellation remains the distinct
+`SegmentationCancelled` outcome and must never publish a partially valid result.
+Comprehensive cancellation checkpoints, repeated-call lifecycle behaviour, and
+embeddability hardening belong to N3.
+
+N2 establishes the authoritative direct library path without claiming that the
+CLI refactor is complete. The existing N0 CLI regression must remain green while
+the operation is extracted. N4 then reduces `cmd_run(...)` to a frontend over
+the operation, removes any remaining duplicate orchestration, and performs the
+full pre-extraction CLI-parity gate.
 
 Deliverables:
 
@@ -567,8 +688,22 @@ Deliverables:
 This is an orchestration and ownership refactor. It is not an algorithm rewrite,
 a Python port, or an opportunity to change scientific defaults.
 
-Exit criterion: a focused C++ test invokes a complete segmentation and inspects
-its owned result without calling CLI or Python code.
+#### Verification and exit criterion
+
+A focused C++ test uses the N0 fixture to construct a `SegmentationRequest`,
+invokes a complete segmentation through `baysor::run_segmentation(...)`, and
+inspects the resulting scientific values without invoking the CLI or Python. It
+checks at least the retained molecule identity, cell/noise assignments,
+confidence, resolved options, cell identifiers and statistics, boundaries,
+count matrix, produced-product flags, seed, and effective-thread provenance.
+Where the N0 reference is applicable, comparison is semantic rather than based
+on byte-identical serialization.
+
+Exit criterion: the direct native test passes, the returned data remains valid
+after all temporary algorithm state has been destroyed, the existing N0 CLI
+regression remains green, and no algorithm or scientific default has changed.
+Cancellation-depth, repeated-call, embeddable-consumer, and final CLI-parity
+gates remain explicitly assigned to N3 and N4.
 
 ### Native Slice N3: Complete cancellation, lifecycle, and embeddability
 
