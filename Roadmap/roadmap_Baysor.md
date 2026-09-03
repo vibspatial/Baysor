@@ -140,6 +140,30 @@ only when profiling demonstrates a material benefit and its ownership and
 copying semantics have been designed and tested. The path-oriented form remains
 the required scalable and Dask-compatible contract.
 
+This is also a scope decision for the native implementation, not a limitation of
+nanobind. Nanobind could accept NumPy buffers, but the current canonical
+`MoleculeData` owns its columns in `std::vector` instances and the processing
+pipeline constructs additional Eigen and BMM working storage. A straightforward
+array binding would therefore still copy the eager Python data into Baysor-owned
+memory. Making that route genuinely zero-copy would require a broader refactor of
+loading, filtering, compaction, gene encoding, matrix construction, and borrowed
+buffer lifetimes. N1 through N4 must not combine the segmentation extraction with
+that data-model refactor.
+
+The initial file route instead reuses the existing native Arrow/Parquet loader as
+the one canonical implementation of projection, filtering, gene encoding, prior
+handling, and `MoleculeData` construction. This reduces scientific, memory, and
+ownership risk while the public operation is extracted. The native roadmap does
+not introduce a second array-input route speculatively.
+
+The Python integration must measure prepared-input write time, native input-read
+time, segmentation time, peak RSS, and temporary-storage volume on representative
+untiled and tile-sized inputs. An in-memory input may be proposed as a separate
+reviewed slice only if those measurements show that staging is material. Its
+first version may still use an explicit copy into `MoleculeData`; borrowed or
+Arrow-backed zero-copy processing requires its own correctness, lifetime, and
+memory benchmarks.
+
 The reusable boundary operation is intentionally different. It accepts packed
 native coordinate and assignment arrays because it is a focused operation with
 a small, explicit buffer contract and is needed after Python has reconciled

@@ -531,6 +531,64 @@ returns only structured paths, status, resource measurements, and provenance.
 Large transcript clouds and native result objects must not pass through the Dask
 scheduler.
 
+Dask does not need a Baysor-specific file abstraction and does not inspect the
+contents of these files. `baysor-python` teaches Dask the handoff through ordinary
+task functions and two small, serializable contracts:
+
+- `PreparedTile` identifies the tile, its durable prepared-input URI, core and
+  halo bounds, input fingerprint, schema version, and preparation provenance;
+- `TileArtifacts` identifies the tile and attempt, the validated native output
+  URIs, status, resource measurements, resolved parameters, and native build
+  provenance.
+
+The corresponding dependency chain is:
+
+```text
+plan immutable core-plus-halo descriptors
+                    |
+                    v
+stage_tile(source, descriptor)
+  read/select with Dask; write durable prepared Parquet; release eager partition
+                    |
+                    | Future[PreparedTile]
+                    v
+segment_tile(prepared_tile, options)
+  create unique attempt directory; call nanobind with paths
+  validate outputs; atomically publish completion manifest
+                    |
+                    | Future[TileArtifacts]
+                    v
+coordinator validates completed manifest
+                    |
+                    v
+reconcile committed artifact paths
+```
+
+Passing the `PreparedTile` Future to `segment_tile(...)` creates the scheduling
+dependency: segmentation cannot start until staging has completed successfully.
+The worker receives the small resolved descriptor and C++ opens the referenced
+Parquet input itself. A pandas DataFrame, Dask partition, NumPy buffer, or complete
+native result is not handed across the native segmentation boundary. Task
+submissions that create attempt files must use non-pure/unique task semantics so
+the scheduler does not incorrectly substitute a prior side effect for a new
+attempt.
+
+Every attempt writes under a unique location and publishes no completion marker
+until the required outputs and schemas have been validated. A failed or cancelled
+attempt remains uncommitted; an automatic or manual retry creates a new attempt
+rather than trusting partial files. The small completed manifest, not directory
+existence alone, is the durable success record and the value consumed by later
+reconciliation tasks.
+
+Paths are an explicit deployment contract. In the supported local cluster, all
+worker processes share the configured run directory. A multi-host client must
+provide a shared filesystem or supported object store visible to the relevant
+workers, or a reviewed localization/upload layer that copies an input into worker
+scratch and publishes outputs to durable shared storage before returning. Local
+worker scratch is never the sole location of a prepared input or completed result
+when the worker will be recycled. Accessibility, write permissions, atomic-publish
+capability, and recovery after worker restart are checked during preflight.
+
 The initial local production configuration is deliberately sequential:
 
 ```text
@@ -564,12 +622,13 @@ explicit native thread configuration or host-level CPU allocation.
 Native C++ allocations are largely unmanaged memory from Dask's perspective.
 Dask RSS limits and Nanny termination are safety guards; spilling cannot reduce
 an active Baysor working set and allocator retention must not be mistaken for
-reusable Dask-managed data. After a successful tile result has been gathered and
-validated, its output is atomically committed; failed and cancelled attempts
-remain uncommitted. The Nanny-supervised worker is proactively restarted after
-every outcome and before another tile is submitted to it. This provides
-deterministic reclamation of the native heap, OpenMP thread stacks, and library
-caches. The worker identity before and after recycling is retained in provenance.
+reusable Dask-managed data. After a successful tile attempt has validated its
+outputs and atomically published its completion manifest, the coordinator
+validates the returned `TileArtifacts`; failed and cancelled attempts remain
+uncommitted. The Nanny-supervised worker is proactively restarted after every
+outcome and before another tile is submitted to it. This provides deterministic
+reclamation of the native heap, OpenMP thread stacks, and library caches. The
+worker identity before and after recycling is retained in provenance.
 
 Cancellation is two-stage. The C++ run operation receives a cooperative native
 cancellation token and checks it at safe phase and iteration boundaries. If it
