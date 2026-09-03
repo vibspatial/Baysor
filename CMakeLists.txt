@@ -197,6 +197,10 @@ endif()
 
 # --- Library target ---
 add_library(baysor_lib
+    # Public segmentation API
+    src/segmentation/cancellation.cpp
+    src/segmentation/segmentation.cpp
+
     # Utils
     src/utils/general.cpp
     src/utils/options.cpp
@@ -308,6 +312,7 @@ if(BAYSOR_WITH_TESTS)
     add_executable(baysor_tests
         tests/test_main.cpp
         tests/native_baseline_test.cpp
+        tests/segmentation_contract_test.cpp
     )
     add_dependencies(baysor_tests baysor)
     target_link_libraries(baysor_tests PRIVATE baysor_lib GTest::gtest_main)

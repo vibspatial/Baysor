@@ -43,6 +43,10 @@ User-facing documentation for this branch:
 
 - [docs/README.md](docs/README.md)
 
+Native integration documentation:
+
+- [Native segmentation API contract](contract.md)
+
 ## Highlights
 
 - **Algorithmic continuity**: follows the Baysor `v0.7.1` segmentation

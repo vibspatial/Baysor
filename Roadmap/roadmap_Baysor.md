@@ -252,8 +252,14 @@ baseline, uses the small legacy-output fixture under
 regression. The N0 verification build passed all 115 tests then present,
 including that regression.
 
-The next product work is Native Slice N1: define the public segmentation
-contracts before moving orchestration out of `cmd_run(...)`.
+Native Slice N1 is implemented and locally verified. It adds the public owning
+request and result types, produced-product tracking, the versioned random-stream
+contract, structured native errors, and the cross-thread cancellation
+source/token pair. Its focused contract tests and the N0 semantic CLI regression
+pass. Review and commit of the slice remain pending before N2 begins.
+
+The next implementation slice is Native Slice N2: move the existing scientific
+orchestration behind the public contract without changing its algorithms.
 
 The deferred actual-UCB experiment remains outside this sequence.
 
@@ -336,6 +342,9 @@ gate N1 through N4.
 
 ### Native Slice N1: Define the public segmentation contracts
 
+Implementation status: implemented and locally verified on 2026-09-03; review
+and commit pending.
+
 Define the stable source-level API that the Baysor CLI and the future nanobind
 module will share. This slice defines a coherent, compilable native boundary;
 it does not yet move the scientific workflow out of `cmd_run(...)` or change an
@@ -358,6 +367,21 @@ SegmentationOutcome run_segmentation(
 
 N1 defines the participating types and the declaration of this operation. N2
 implements it by moving the existing orchestration behind the new boundary.
+
+#### Consumer entry point and API exposure
+
+The code-aligned diagram and field-level reference now live in the root-level
+[native segmentation API contract](../contract.md). It identifies
+`baysor_python.segment(...)` as the future public Python entry point, the
+nanobind module as a private adapter, and `baysor::run_segmentation(...)` as the
+public native source API. It also enumerates the request, result, cancellation,
+and error contracts and separates them from native implementation details.
+
+At the end of N1, the public native types and function declaration exist, but
+the function has no scientific implementation yet. N2 makes the native call
+operational, N4 changes the CLI to use it, and Python Slices 1C and 1D add the
+private binding and public Python entry point respectively. No Python-callable
+API is implemented in this repository.
 
 #### Request contract
 
