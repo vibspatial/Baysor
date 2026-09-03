@@ -413,11 +413,25 @@ reports without changing assignments.
 #### Cancellation contract
 
 N1 introduces a small C++17-compatible cancellation facility backed by
-thread-safe shared state. Its documented contract must state:
+thread-safe shared state. The public contract separates the two capabilities:
 
-- how the caller creates and owns the cancellation state;
+- a `CancellationSource` owns the shared state and may request cancellation;
+- a copyable, read-only `CancellationToken` observes that same state and is the
+  value passed to `run_segmentation(...)`.
+
+This source/token split lets an embedding caller retain the control capability
+on one thread while the segmentation thread receives only the observation
+capability. In `baysor-python`, for example, a worker-side registry may retain
+the source while the GIL-released native call receives its token. The registry
+and Dask control protocol remain outside this repository; the native contract
+must not depend on Python, nanobind, or Dask.
+
+The documented contract must state:
+
+- how the source creates and owns the shared state, and the copy and lifetime
+  semantics of the token;
 - that a token may safely be observed by the segmentation thread while another
-  thread requests cancellation;
+  thread uses its source to request cancellation;
 - that cancellation is cooperative rather than forced thread termination; and
 - that cancellation produces a distinct outcome and never a partially valid
   `SegmentationResult`.
@@ -453,8 +467,8 @@ Deliverables:
   assignments, confidence fields, optional clusters, cell statistics,
   boundaries, counts, convergence diagnostics, resolved options, and native
   provenance;
-- a thread-safe C++17 cancellation token with a documented ownership and
-  cross-thread use contract;
+- a thread-safe C++17 cancellation source/token pair with a documented
+  ownership, lifetime, and cross-thread use contract;
 - a distinct cancelled outcome that cannot be mistaken for a complete result;
 - a run-local random-state contract covering every segmentation-affecting source
   of randomness and separating scientific streams from diagnostic-only streams;
@@ -468,10 +482,10 @@ Deliverables:
 
 Focused contract tests compile and link only against `baysor_lib`. They verify
 that a request can be constructed without CLI code, its defaults include seed
-`1`, result values have safe owning/move semantics, cancellation can be requested
-from another thread, and a cancelled outcome cannot be treated as a successful
-result. They do not duplicate the N0 scientific regression or prematurely test
-the N2 implementation.
+`1`, result values have safe owning/move semantics, a source can request
+cancellation while another thread observes its token, and a cancelled outcome
+cannot be treated as a successful result. They do not duplicate the N0
+scientific regression or prematurely test the N2 implementation.
 
 Exit criterion: the request, result, cancellation, error, and ownership contracts
 are documented and reviewable as a coherent native API; their focused tests can

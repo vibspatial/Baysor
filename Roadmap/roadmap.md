@@ -573,6 +573,14 @@ submissions that create attempt files must use non-pure/unique task semantics so
 the scheduler does not incorrectly substitute a prior side effect for a new
 attempt.
 
+Writing files from a Dask task, including through an in-process C++ call, is an
+intentional controlled side effect rather than an unsupported Dask pattern. It
+is permitted here only because inputs are immutable, every execution has a
+unique attempt identity and directory, retries never reuse partial files, and a
+small atomic completion manifest is the sole commit point. The task is submitted
+with non-pure semantics and returns only the committed `TileArtifacts`; no later
+stage treats the mere presence of output files as success.
+
 Every attempt writes under a unique location and publishes no completion marker
 until the required outputs and schemas have been validated. A failed or cancelled
 attempt remains uncommitted; an automatic or manual retry creates a new attempt
@@ -606,6 +614,38 @@ enforce `W * T <= C`, where `C` is the CPU allocation, and must also satisfy the
 measured per-worker memory budget. A Python thread pool must not be used to run
 multiple Baysor segmentations inside one worker process.
 
+The bound C++ operation runs in the Dask worker process; it does not implicitly
+create a child process. Dask continues to track the Future as processing and the
+Nanny can monitor or replace the worker process, but the scheduler cannot inspect
+the native call's internal phases or forcibly pre-empt its execution thread.
+Releasing the GIL is therefore mandatory: it keeps the worker's Python control
+thread responsive enough to service status and cooperative-cancellation
+requests. GIL release does not itself make native code interruptible, so wall
+timeouts and the hard-restart fallback remain part of the execution contract.
+
+The process and supervision topology is:
+
+```text
+Python coordinator
+        |
+        | submit tile / inspect Future
+        v
+Dask scheduler ------------------------> Dask worker process
+        |                                     |
+        | targeted restart                    +-- Python task thread
+        v                                           |
+Dask Nanny                                          +-- nanobind
+        |                                                 |
+        +---- supervises/restarts worker                  +-- Baysor C++
+                                                               |
+                                                               +-- OpenMP threads
+```
+
+The scheduler communicates with the worker for normal task execution. The Nanny
+is a separate supervisor, not part of that task-data path. Cooperative
+cancellation reaches the registered native token through the still-responsive
+worker process; hard cancellation asks the Nanny to replace that entire worker.
+
 The one-worker configuration is the first validated operating mode, not an
 architectural limit. Tile attempts already have immutable descriptors, isolated
 attempt directories, and small structured results, so increasing `W` must be an
@@ -630,12 +670,44 @@ outcome and before another tile is submitted to it. This provides deterministic
 reclamation of the native heap, OpenMP thread stacks, and library caches. The
 worker identity before and after recycling is retained in provenance.
 
-Cancellation is two-stage. The C++ run operation receives a cooperative native
-cancellation token and checks it at safe phase and iteration boundaries. If it
-does not stop within a configured grace period, the orchestrator cancels the
-Future and restarts the dedicated worker through its Nanny. `Future.cancel()`
-alone is not treated as a hard interruption of executing C++ code. Incomplete
-attempt directories are never promoted to completed tile outputs.
+Cancellation uses an explicit worker control channel; constructing a token only
+inside the task would not let the coordinator reach an executing native call.
+Each worker owns a thread-safe active-attempt registry keyed by the unique
+attempt identifier. Immediately before entering the binding, `segment_tile(...)`
+creates and registers a native `CancellationSource`, passes its read-only token
+to C++, and unregisters it with RAII/`finally` cleanup on every exit path. The
+registry stores at most the worker's single active Baysor attempt and no native
+result data.
+
+The two-stage cancellation sequence is:
+
+1. the coordinator locates the worker currently processing the attempt and sends
+   a targeted request through a supported Dask worker control mechanism, such as
+   a reviewed `Client.run(...)` or WorkerPlugin protocol;
+2. the worker-side handler finds the attempt and sets the source's thread-safe
+   cancellation flag, while C++ checks its token at safe phase and iteration
+   boundaries;
+3. the coordinator keeps the Future-to-worker association and waits for the
+   distinct cancelled outcome for a configured grace period; and
+4. if the native call does not return, the coordinator restarts that dedicated
+   worker through its Nanny and only then releases or cancels the Future.
+
+`Future.cancel()` alone is not treated as a hard interruption of executing C++
+code and must not be issued first, because doing so can discard task-tracking
+information needed for the targeted shutdown. If an attempt has already
+finished and unregistered, the control handler reports it as inactive and the
+coordinator rechecks the Future instead of treating that race as an error. The
+control path must be integration-tested while the worker's sole task thread is
+inside the GIL-released binding.
+
+A native exception becomes a failed Future. A fatal native crash or OOM loses
+the worker and is recovered by its Nanny. An unresponsive call reaches its wall
+timeout and triggers the same dedicated-worker restart. In all cases, output
+promotion is independent of task termination: incomplete attempt directories
+have no completion manifest, remain uncommitted, and are never consumed by
+reconciliation. A child subprocess per tile remains a possible stronger
+isolation mode if production evidence requires it, but is not part of the first
+supported design because the one-task worker is already disposable.
 
 The locally owned cluster is dedicated to Baysor. A caller-managed client is
 accepted only after preflight proves that its Baysor workers are exclusive,
@@ -1295,12 +1367,15 @@ types as public Python API. The binding releases the GIL around the native run,
 defines ownership for every returned view, and translates C++ exceptions at the
 module boundary.
 
-The operation must also accept a thread-safe cooperative cancellation token. It
-checks that token only at defined safe phase and iteration boundaries and returns
-a distinct cancelled outcome without publishing a complete result. The CLI and
-nanobind frontends use the same cancellation path; process termination remains a
-supervisor fallback when native cancellation does not complete within its grace
-period.
+The operation must also accept a thread-safe cooperative cancellation token. A
+separate source retains the ability to request cancellation from another thread;
+the token passed to the run operation provides read-only access to their shared
+state. This source/token contract remains ordinary C++ and has no Dask or Python
+dependency. It checks that token only at defined safe phase and iteration
+boundaries and returns a distinct cancelled outcome without publishing a
+complete result. The CLI and nanobind frontends use the same cancellation path;
+process termination remains a supervisor fallback when native cancellation does
+not complete within its grace period.
 
 The Phase 2 boundary API will bind the existing boundary functions, but
 bounded-memory use requires explicit target-cell selection while retaining all
@@ -1566,7 +1641,8 @@ Deliverables:
 - expose the coarse run operation as `baysor_python._baysor_core`;
 - retain a path-oriented request and result boundary for large backed datasets;
 - release the GIL for the native calculation;
-- expose the native cancellation handle so a separate control thread can request
+- bind the native cancellation source/token contract and maintain a thread-safe
+  active-attempt registry so a separate worker control thread can request
   cooperative shutdown while the run has released the GIL;
 - translate C++ exceptions into documented Python exceptions;
 - define ownership and lifetime for every returned object or view; and
@@ -1745,8 +1821,12 @@ Deliverables:
   an audit of other native thread pools, and enforcement of the total CPU budget;
 - attempt-specific output directories, validation, atomic manifest commit, and
   proactive worker recycling after every tile attempt;
-- cooperative native cancellation followed by Nanny worker restart after a grace
-  period, with no promotion of partial outputs;
+- a per-worker active-attempt cancellation registry, a targeted coordinator-to-
+  worker control request, cooperative native cancellation before Future release,
+  and Nanny worker restart after a grace period, with no promotion of partial
+  outputs;
+- explicit wall timeouts and documented handling for Python/native exceptions,
+  worker loss, fatal native failure, OOM, and an unresponsive native call;
 - RSS and unmanaged-memory monitoring with memory-budget admission control;
 - explicit per-tile `n_cells_init` calculation;
 - retained logs, resource traces, confidence/noise-fit summaries, and
@@ -1897,9 +1977,15 @@ noise, degenerate cells, and supported wheel installation.
 
 Local Dask integration tests must additionally verify that only one tile is
 admitted per worker, the worker has one Dask execution thread, the effective
-OpenMP budget is recorded, the worker PID changes after each tile, allocator-held
-RSS cannot accumulate across tile attempts, and cancellation leaves no committed
-partial result. The same fixture must produce identical tile outputs through the
+OpenMP budget is recorded, the worker PID changes after each tile, and
+allocator-held RSS cannot accumulate across tile attempts. Cancellation tests
+must prove that the worker control path remains responsive while the sole task
+thread is inside the GIL-released binding, reaches the correct active-attempt
+source, and yields no committed partial result. Failure-injection fixtures must
+cover a normal exception, injected worker loss, cooperative cancellation, and a
+simulated non-responsive native operation that exceeds its grace period and is
+replaced by a fresh Nanny worker. Each retry must use a new attempt identity and
+directory. The same fixture must produce identical tile outputs through the
 locally owned cluster and a compatible externally supplied client.
 
 Multi-worker integration tests must use heterogeneous tile durations and verify
@@ -2005,6 +2091,13 @@ normal path proactively recycles a dedicated Nanny-supervised worker after each
 attempt; the Nanny threshold is a last-resort guard. Tests must distinguish a
 bounded in-process allocator plateau from linear growth, and the run manifest
 must make worker loss, cancellation, retry, and output promotion auditable.
+
+The worker remains under Dask's lifecycle control while C++ executes in process:
+the Future is visible as processing and the Nanny observes process RSS and
+liveness, but Dask cannot inspect or forcibly stop the native stack. The released
+GIL permits a targeted worker control request to set the registered native
+cancellation source. If cooperative checkpoints do not return the call before
+the grace deadline, replacing the exclusive worker process is the hard stop.
 
 ### Oversubscription and unsafe shared-cluster cancellation
 
