@@ -80,6 +80,72 @@ binary SDK and must not expose internal BMM types merely to make them bindable.
 The request and result should be coarse enough that both frontends can use them
 without duplicating scientific orchestration or parameter resolution.
 
+### Data transport and object ownership
+
+The selected segmentation architecture is deliberately hybrid. Paths are used
+at the large-data transport boundaries, while the scientific implementation
+operates on owning C++ objects:
+
+```text
+Python or SpatialData objects
+            |
+            | prepare stable tabular input
+            v
+CSV or Parquet path + typed SegmentationRequest
+            |
+            | nanobind calls the C++ library directly; no CLI subprocess
+            v
+owning C++ MoleculeData and algorithm working state
+            |
+            v
+owned C++ SegmentationResult
+            |
+            | reusable native serializers
+            v
+output artifacts on disk + paths and provenance
+            |
+            v
+Python result objects or coordinated SpatialData elements
+```
+
+The initial `SegmentationRequest` is therefore path-oriented: its molecule input
+is a typed file-source specification for supported CSV or Parquet data, not a
+Python object or an unstructured CLI argument. `run_segmentation(...)` loads that
+source and then operates entirely on native objects. A path-oriented nanobind
+call is still an in-process native-library call with the GIL released; it does
+not invoke the Baysor executable, parse CLI arguments, or start a subprocess.
+
+`SegmentationResult` means the owned, in-memory C++ scientific result. It is
+distinct from a Python-layer artifact descriptor, here called
+`SegmentationArtifacts`, which contains validated output paths, status, and
+provenance after native serialization. The CLI may serialize the native result
+and map errors to exit codes. A Python worker may serialize the same native
+result and return `SegmentationArtifacts` without exposing or transferring the
+complete native object graph to Python. A higher-level SpatialData adapter may
+accept and return Python objects while keeping this staging and serialization
+boundary as an implementation detail.
+
+This choice supports large datasets, bounded worker memory, retryable and
+inspectable outputs, deterministic worker recycling, and future Dask execution.
+In particular, tile tasks exchange only immutable descriptors and artifact
+paths; complete transcript clouds and native results do not pass through the
+Dask scheduler. The costs are staging I/O, temporary-storage requirements, and
+some additional latency for small interactive runs.
+
+A direct in-memory segmentation input from NumPy, PyArrow, or another Python
+object is not part of the initial contract. Such an API is not automatically
+zero-copy: it requires explicit dtype, layout, string/category, mutation,
+lifetime, and GIL-release rules. It may be added as a second input-source form
+only when profiling demonstrates a material benefit and its ownership and
+copying semantics have been designed and tested. The path-oriented form remains
+the required scalable and Dask-compatible contract.
+
+The reusable boundary operation is intentionally different. It accepts packed
+native coordinate and assignment arrays because it is a focused operation with
+a small, explicit buffer contract and is needed after Python has reconciled
+tile-local assignments. This exception does not require the complete
+segmentation API to expose Python-owned arrays or internal BMM objects.
+
 ### Randomness and reproducibility contract
 
 The current feature branch, before extraction begins, is the behavioural
