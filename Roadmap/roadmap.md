@@ -522,6 +522,35 @@ does not implement a second Baysor executor. Tile descriptions, manifests,
 transactional outputs, reconciliation, and scientific acceptance remain ordinary
 `baysor-python` contracts rather than Dask collection semantics.
 
+### Established architectural precedents
+
+The execution architecture combines established open-source patterns rather than
+introducing a new Python/native-computing model:
+
+- [PyArrow](https://arrow.apache.org/docs/python/parquet.html) exposes the native
+  Arrow C++ Parquet implementation to Python and supports direct path-based reads
+  and writes. [Dask DataFrame](https://docs.dask.org/en/latest/dataframe-parquet.html)
+  schedules partition-level Parquet writes, commonly through that native-backed
+  implementation. This demonstrates that a Dask task calling native code and
+  materializing file-backed artifacts is an ordinary supported pattern.
+- [XGBoost](https://xgboost.readthedocs.io/en/stable/python/dask-examples/index.html)
+  and [LightGBM](https://lightgbm.readthedocs.io/en/stable/Parallel-Learning-Guide.html#dask)
+  provide maintained Dask integrations around native computation libraries. They
+  use different data and distributed-algorithm contracts, but establish the
+  precedent for executing substantial native work inside Dask workers.
+- [DuckDB](https://duckdb.org/docs/stable/clients/python/overview) is an
+  in-process native engine whose Python API can read and write Parquet through
+  paths. It demonstrates that an in-process binding need not expose every input
+  as a NumPy or Python-owned memory buffer.
+
+These projects are precedents for the individual integration boundaries, not
+drop-in blueprints for Baysor. Attempt-specific directories, an atomic completion
+manifest, active-attempt cancellation routing, exclusive workers, and proactive
+worker recycling are `baysor-python` safeguards for Baysor's coarse, long-running,
+memory-intensive calls. Dask and nanobind do not provide those workflow semantics
+automatically. A direct in-memory Arrow or NumPy boundary remains a possible
+measured optimization, not a prerequisite for a professional native integration.
+
 ### Dask execution and worker-lifecycle contract
 
 The tiled implementation should submit one coarse Future per expanded tile. A
