@@ -252,11 +252,12 @@ baseline, uses the small legacy-output fixture under
 regression. The N0 verification build passed all 115 tests then present,
 including that regression.
 
-Native Slice N1 is implemented and locally verified. It adds the public owning
-request and result types, produced-product tracking, the versioned random-stream
-contract, structured native errors, and the cross-thread cancellation
-source/token pair. Its focused contract tests and the N0 semantic CLI regression
-pass. Review and commit of the slice remain pending before N2 begins.
+Native Slice N1 is complete. Commit
+`f74417481feb988952eedc22c688e1aefb5e8eb7` adds the public owning request and
+result types, produced-product tracking, the versioned random-stream contract,
+structured native errors, the cross-thread cancellation source/token pair, and
+the durable native API contract. Its focused contract tests and the N0 semantic
+CLI regression pass.
 
 The next implementation slice is Native Slice N2: move the existing scientific
 orchestration behind the public contract without changing its algorithms.
@@ -342,8 +343,8 @@ gate N1 through N4.
 
 ### Native Slice N1: Define the public segmentation contracts
 
-Implementation status: implemented and locally verified on 2026-09-03; review
-and commit pending.
+Implementation status: complete as of 2026-09-03 in commit
+`f74417481feb988952eedc22c688e1aefb5e8eb7`.
 
 Define the stable source-level API that the Baysor CLI and the future nanobind
 module will share. This slice defines a coherent, compilable native boundary;
