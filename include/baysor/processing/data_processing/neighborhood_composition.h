@@ -44,7 +44,8 @@ Eigen::MatrixXf estimate_gene_vectors(
     const std::vector<int>& gene_ids,
     int n_components,
     const std::string& method = "ri",
-    bool per_molecule = false
+    bool per_molecule = false,
+    unsigned int random_seed = 42
 );
 
 Eigen::MatrixXf project_gene_vectors(

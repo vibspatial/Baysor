@@ -264,6 +264,12 @@ target_include_directories(baysor_lib PUBLIC
     ${BAYSOR_HDF5_INCLUDE_DIRS}
 )
 
+set(BAYSOR_BUILD_REVISION "unknown" CACHE STRING "Source revision recorded in native run provenance")
+target_compile_definitions(baysor_lib PRIVATE
+    BAYSOR_VERSION="${PROJECT_VERSION}"
+    BAYSOR_BUILD_REVISION="${BAYSOR_BUILD_REVISION}"
+)
+
 target_link_libraries(baysor_lib PUBLIC
     Eigen3::Eigen
     OpenMP::OpenMP_CXX

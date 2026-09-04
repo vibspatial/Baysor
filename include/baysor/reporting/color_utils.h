@@ -82,7 +82,8 @@ NcvBasisModel fit_ncv_basis_model(
     const std::vector<double>& confidence,
     int k_neighbors,
     int basis_sample_size = 100000,
-    int n_components = 20
+    int n_components = 20,
+    unsigned int random_seed = 42
 );
 
 NcvProjectedModel fit_ncv_projected_model(
@@ -93,7 +94,8 @@ NcvProjectedModel fit_ncv_projected_model(
     int k_neighbors,
     int basis_sample_size = 100000,
     int n_components = 20,
-    bool include_full_projection = true
+    bool include_full_projection = true,
+    unsigned int random_seed = 42
 );
 
 std::vector<std::string> gene_composition_color_embedding_streaming(

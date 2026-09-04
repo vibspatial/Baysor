@@ -5,9 +5,11 @@
 #include <string>
 #include <Eigen/Dense>
 
+#include "baysor/utils/xoshiro.h"
+
 namespace baysor {
 
-/// Polygon collection: cell name/ID -> Nx2 matrix of boundary vertices
+/// Polygon collection: cell name/ID -> 2 x N matrix of boundary vertices
 using PolygonCollection = std::unordered_map<std::string, Eigen::MatrixXd>;
 using PolygonStack = std::vector<std::pair<std::string, PolygonCollection>>;
 
@@ -16,7 +18,8 @@ PolygonCollection boundary_polygons(
     const Eigen::MatrixXd& pos_data,       // dims x n_molecules
     const std::vector<int>& cell_labels,
     const std::vector<std::string>* cell_names = nullptr,
-    double offset_rel = 0.01
+    double offset_rel = 0.01,
+    Xoshiro256pp* random_state = nullptr
 );
 
 /// Estimate polygons from a grid-based segmentation mask
@@ -31,7 +34,8 @@ std::pair<PolygonCollection, PolygonStack> boundary_polygons_auto(
     const std::vector<int>& assignment,
     bool estimate_per_z = false,
     const std::vector<std::string>* cell_names = nullptr,
-    bool verbose = true
+    bool verbose = true,
+    Xoshiro256pp* random_state = nullptr
 );
 
 } // namespace baysor

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "baysor/processing/models/adj_list.h"
+#include "baysor/utils/xoshiro.h"
 #include <vector>
 #include <Eigen/Dense>
 
@@ -39,14 +40,18 @@ NoiseFitResult fit_noise_probabilities(
 void append_confidence(
     MoleculeData& data,
     int nn_id,
-    double prior_confidence = 0.5
+    double prior_confidence = 0.5,
+    Xoshiro256pp* random_state = nullptr,
+    bool verbose = true
 );
 
 /// Estimate confidence and return the full noise-model diagnostics.
 ConfidenceEstimationDetails estimate_confidence_details(
     const MoleculeData& data,
     int nn_id,
-    double prior_confidence = 0.5
+    double prior_confidence = 0.5,
+    Xoshiro256pp* random_state = nullptr,
+    bool verbose = true
 );
 
 } // namespace baysor

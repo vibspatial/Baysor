@@ -3,6 +3,8 @@
 #include <vector>
 #include <Eigen/Dense>
 
+#include "baysor/utils/xoshiro.h"
+
 namespace baysor {
 
 /// Result of adjacency computation
@@ -21,11 +23,15 @@ AdjacencyResult adjacency_list(
     bool filter = true,
     double n_mads = 2.0,
     int k_adj = 5,
-    AdjacencyType type = AdjacencyType::Auto
+    AdjacencyType type = AdjacencyType::Auto,
+    Xoshiro256pp* random_state = nullptr
 );
 
 /// Normalize points to [1+eps, 2-eps] range for Delaunay tessellation
-Eigen::MatrixXd normalize_points(const Eigen::MatrixXd& points);
+Eigen::MatrixXd normalize_points(
+    const Eigen::MatrixXd& points,
+    Xoshiro256pp* random_state = nullptr
+);
 
 /// Filter edges longer than median + n_mads * MAD in log-distance
 void filter_long_edges(AdjacencyResult& result, double n_mads = 2.0);

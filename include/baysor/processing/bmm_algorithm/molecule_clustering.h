@@ -37,6 +37,7 @@ struct ClusteringOptions {
     double tol = 0.01;
     double mrf_weight = 1.0;
     int max_iters = -1;
+    unsigned int random_seed = 42;
 };
 
 ClusteringResult cluster_molecules(
@@ -103,7 +104,8 @@ ClusteringResult cluster_molecules_ica(
     double tol       = 0.01,
     double mrf_weight = 1.0,
     int max_iters    = -1,
-    bool verbose     = true
+    bool verbose     = true,
+    unsigned int random_seed = 42
 );
 
 ClusteringResult cluster_molecules_louvain(
@@ -117,7 +119,8 @@ ClusteringResult cluster_molecules_louvain(
     int target_clusters = 4,
     int n_dims = 20,
     int basis_sample_size = 100000,
-    bool verbose = true
+    bool verbose = true,
+    unsigned int random_seed = 42
 );
 
 ClusteringResult cluster_molecules_leiden(
@@ -131,7 +134,8 @@ ClusteringResult cluster_molecules_leiden(
     int target_clusters = 4,
     int n_dims = 20,
     int basis_sample_size = 100000,
-    bool verbose = true
+    bool verbose = true,
+    unsigned int random_seed = 42
 );
 
 } // namespace baysor

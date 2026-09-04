@@ -36,7 +36,8 @@ AdjList build_molecule_graph(
     bool use_local_gene_similarities = false,
     AdjacencyType type = AdjacencyType::Auto,
     int composition_neighborhood = 0,
-    int n_gene_pcs = 0
+    int n_gene_pcs = 0,
+    Xoshiro256pp* random_state = nullptr
 );
 
 /// Full initialization of BmmData from molecule data

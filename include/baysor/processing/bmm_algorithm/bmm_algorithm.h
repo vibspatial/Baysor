@@ -1,6 +1,7 @@
 #pragma once
 
 #include "baysor/processing/models/bmm_data.h"
+#include "baysor/utils/xoshiro.h"
 #include <cstdint>
 
 namespace baysor {
@@ -28,11 +29,18 @@ void bmm(BmmData<N>& data,
          bool freeze_position = false,
          bool freeze_components = false,
          double tol = 0.0,
-         int min_molecules_display = 0);  ///< display threshold (0 = same as min_molecules_drop)
+         int min_molecules_display = 0,
+         Xoshiro256pp* single_thread_random_state = nullptr,
+         std::uint64_t parallel_random_seed = 1);  ///< display threshold (0 = same as min_molecules_drop)
 
 /// E-step: reassign molecules to components based on spatial + expression density
 template<int N>
-EstepStats expect_dirichlet_spatial(BmmData<N>& data, bool stochastic = true);
+EstepStats expect_dirichlet_spatial(
+    BmmData<N>& data,
+    bool stochastic = true,
+    Xoshiro256pp* single_thread_random_state = nullptr,
+    std::uint64_t parallel_random_seed = 1
+);
 
 /// M-step: re-estimate all component parameters from current assignments
 template<int N>

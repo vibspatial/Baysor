@@ -8,11 +8,11 @@ truth; this document explains their intended use and ownership.
 
 ## Status
 
-The public native types below are defined and tested. The current header declares
-`baysor::run_segmentation(...)`, but execution of the scientific workflow is not
-yet available through that entry point. This repository does not provide a
-Python extension; the nanobind adapter and public Python API belong to the
-separate `baysor-python` distribution.
+The public native types and `baysor::run_segmentation(...)` operation below are
+implemented and tested. The operation executes the complete scientific workflow
+directly through `baysor_lib`; it does not invoke the CLI or write output files.
+This repository does not provide a Python extension; the nanobind adapter and
+public Python API belong to the separate `baysor-python` distribution.
 
 This is a versioned C++17 source-level API designed to be shared by the CLI and
 native-language bindings. It is not a frozen binary ABI.
@@ -58,8 +58,9 @@ Python caller: user / Harpy adapter / Dask tile task
                               v
        validated files on disk + Python SegmentationArtifacts
 
-Baysor CLI is a sibling frontend over the same public native API;
-it is not the implementation used by the Python caller.
+The current Baysor CLI retains its locked compatibility orchestration while its
+frontend is migrated to this API. It is not the implementation used by the
+Python caller.
 ```
 
 The exposed layers are:
@@ -68,7 +69,7 @@ The exposed layers are:
 | --- | --- | --- |
 | Public Python product API | `baysor_python.segment(...)`, typed Python options, `SegmentationArtifacts`, and documented Python exceptions | Supported entry point for Python callers; owned by `baysor-python` |
 | Private Python/native adapter | `baysor_python._baysor_core` and its nanobind conversions, GIL handling, cancellation registry, and exception translation | Implementation detail of `baysor-python`; callers must not depend on its exact signature or binding types |
-| Public native source API | `SegmentationRequest`, `CancellationToken`, `SegmentationOutcome`, `SegmentationResult`, `SegmentationCancelled`, `SegmentationError`, and `run_segmentation(...)` in namespace `baysor` | Supported C++17 integration surface shared by the CLI and nanobind module |
+| Public native source API | `SegmentationRequest`, `CancellationToken`, `SegmentationOutcome`, `SegmentationResult`, `SegmentationCancelled`, `SegmentationError`, and `run_segmentation(...)` in namespace `baysor` | Supported C++17 integration surface for native consumers and the nanobind module; the compatibility CLI is being migrated to the same surface |
 | Native internals | `BmmData`, graphs, clustering and estimator working objects, CLI arguments, logger configuration, filenames, and process exit codes | Private implementation details that may evolve behind the public operation |
 
 ## Native operation
@@ -93,6 +94,13 @@ It accepts exactly two parameters:
 
 The operation does not accept CLI arguments, Python objects, an output
 directory, filenames, logger configuration, or process-exit policy.
+
+It performs the following scientific sequence using the same native loaders and
+algorithms as the CLI: validate and resolve options, load molecules and an
+optional prior, estimate molecule confidence, build the molecule graph, perform
+optional molecule clustering, run the 2D or 3D BMM, and materialize the requested
+scientific products. Values that survive the call are copied or moved into the
+owning result; internal graphs, clustering models, and BMM state do not escape.
 
 ## `SegmentationRequest`
 
@@ -202,6 +210,44 @@ Until the selective-materialization work is implemented, the engine may produce
 more than requested. The result's `produced_products` field is authoritative
 about what is actually present.
 
+## Randomness and native threads
+
+Each call constructs its core scientific random generator from `random_seed`.
+The generator is passed explicitly through duplicate-coordinate jitter, graph
+construction, single-thread stochastic BMM assignment, and boundary estimation.
+Molecule clustering, neighborhood-composition colours, and diagnostic embeddings
+receive deterministic seeds derived from the same master seed through the
+versioned `RandomSubstream` contract. The default master seed `1` maps the core
+stream to seed `1` and the other established subsystem streams to seed `42`,
+preserving the one-thread compatibility baseline.
+
+A positive `native_threads` value configures OpenMP for the duration of the call
+and the previous setting is restored before return; zero uses the runtime's
+configured selection. `provenance.effective_native_threads` records the observed
+setting.
+
+The public reproducibility contract is:
+
+| Execution | Guarantee |
+| --- | --- |
+| One native thread, with the same prepared input, options, Baysor and dependency builds, platform, and master seed | Repeated calls, including calls made in the same process, produce the same semantic scientific result. |
+| More than one native thread, with the same seed and thread count | Baysor initializes the same versioned random streams, but does not guarantee an identical result. Dynamic scheduling can associate work with different streams, and parallel floating-point evaluation order can vary. |
+| Different native thread counts | Results may differ. |
+| Different builds or platforms | Bitwise identity is not guaranteed; compatibility must be assessed using the semantic output contract and declared numerical tolerances. |
+
+Here, the same *semantic scientific result* means the same retained molecule
+identities and the same noise/cell partition, allowing a consistent relabelling
+of otherwise equivalent cell identifiers, with floating-point products compared
+using their declared tolerances. It does not mean byte-identical output files,
+identical serialization order, or cross-platform bitwise equality.
+
+Callers that require deterministic replay must explicitly set
+`native_threads = 1`; leaving it at `0` does not provide that guarantee because
+the runtime may select multiple threads. Every completed run records the master
+seed, random-stream contract version, derived stream seeds, and effective native
+thread setting in `SegmentationResult::provenance`. Consumers comparing tiled or
+distributed runs should lock and record both the seed and thread configuration.
+
 ## Return and failure contract
 
 `SegmentationOutcome` is:
@@ -218,7 +264,10 @@ There are three mutually exclusive outcomes:
 - failure throws `SegmentationError` with a structured error code and message.
 
 Cancellation is not an exception and is never represented as a partially valid
-result.
+result. The operation observes cancellation before work and between major
+scientific phases. Cancellation is cooperative, so a request made while one
+native primitive is running takes effect when that primitive returns to a safe
+checkpoint.
 
 ### `SegmentationResult`
 
@@ -234,7 +283,7 @@ have been destroyed:
 | `neighborhood_composition_colors` | `std::vector<std::string>` | Per-molecule neighborhood-composition colors when produced |
 | `cell_ids` | `std::vector<std::string>` | Stable cell identifiers ordered by positive assignment value |
 | `cell_statistics` | `std::optional<CellStatistics>` | Named dense per-cell statistics table |
-| `boundaries_2d` | `std::optional<PolygonCollection>` | Cell ID to an `N x 2` boundary-vertex matrix |
+| `boundaries_2d` | `std::optional<PolygonCollection>` | Cell ID to a `2 x N` boundary-vertex matrix |
 | `boundaries_3d` | `std::optional<PolygonStack>` | Per-slice collections of cell boundary polygons |
 | `count_matrix` | `std::optional<CellByGeneCounts>` | Sparse cell-by-gene count matrix and owned axis labels |
 | `diagnostics` | `std::optional<SegmentationDiagnostics>` | Requested report-neutral convergence and model diagnostics |
@@ -311,6 +360,13 @@ The input path belongs to `SegmentationRequest` because it is the scalable
 transport into the native operation. The output directory does not belong to
 that request. On success, `run_segmentation(...)` returns an in-memory native
 `SegmentationResult`; a frontend then passes it to reusable native serializers.
+
+[`include/baysor/reporting/output.h`](include/baysor/reporting/output.h) provides
+result-based overloads for the molecule table (CSV or Parquet), cell statistics
+(CSV or Parquet), count matrix (TSV), and 2D boundaries (GeoJSON). They require
+the corresponding product to be present and report failures with
+`SegmentationErrorCode::Serialization`. File naming and output-directory policy
+remain the frontend's responsibility.
 
 The public Python call returns a small `SegmentationArtifacts`
 descriptor containing validated output paths, status, resource measurements,
