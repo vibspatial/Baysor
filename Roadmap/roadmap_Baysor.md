@@ -218,6 +218,7 @@ combined roadmap is explicit so that the two documents cannot silently diverge.
 | N0: Native baseline and regression fixture | Foundation of Slice 1A.1 | None |
 | N1: Public segmentation contracts | Slice 1A.1 | None |
 | N2: Scientific orchestration extraction | Slice 1A.1 | None |
+| N2b: Scientific parity matrix | N2 review and merge hardening | None |
 | N3: Native lifecycle and embeddability gate | Slice 1A.1 | `baysor-python` pins the reviewed commit in Slice 1A.2 |
 | N4: CLI frontend and parity | Slice 1B | `baysor-python` advances to the reviewed parity commit |
 | N5: Public boundary operation | Native portion of Phase 2 | `baysor-python` binds the reviewed operation |
@@ -229,14 +230,14 @@ combined roadmap is explicit so that the two documents cannot silently diverge.
 The dependency order is:
 
 ```text
-N0 -> N1 -> N2 -> N3 -> N4
-                         |
-                         +-> N5 -> native boundary handoff
-                         +-> N6 -> stable-identity handoff
-                         +-> N7 -> selective-output handoff
-                         +-> N8 -> global-calibration handoff
-                                      |
-                                      +-> N9 only if validation requires it
+N0 -> N1 -> N2 -> N2b -> N3 -> N4
+                                |
+                                +-> N5 -> native boundary handoff
+                                +-> N6 -> stable-identity handoff
+                                +-> N7 -> selective-output handoff
+                                +-> N8 -> global-calibration handoff
+                                             |
+                                             +-> N9 only if validation requires it
 ```
 
 N5 through N8 may be developed as separate branches after N4. They must each
@@ -259,8 +260,18 @@ structured native errors, the cross-thread cancellation source/token pair, and
 the durable native API contract. Its focused contract tests and the N0 semantic
 CLI regression pass.
 
-The next implementation slice is Native Slice N2: move the existing scientific
-orchestration behind the public contract without changing its algorithms.
+Native Slice N2 is complete in the current working tree as of 2026-09-03. The
+public `run_segmentation(...)` operation now performs canonical option
+resolution, molecule and prior loading, confidence estimation, graph and
+clustering setup, 2D/3D BMM execution, and owned scientific-result
+materialization. Random state is run-local and derived from the N1 substream
+contract, result-based serializers cover the locked legacy products, and the
+direct operation plus unchanged CLI both pass the N0 semantic fixture.
+
+The next implementation slice is Native Slice N2b: exercise the stochastic
+branches touched by extraction through a small scientific parity matrix while
+the N2 changes are reviewed. N3 then completes cancellation-depth, repeated-call
+lifecycle, and embedding-consumer hardening.
 
 The deferred actual-UCB experiment remains outside this sequence.
 
@@ -519,6 +530,8 @@ path remains unchanged pending N2.
 
 ### Native Slice N2: Extract the scientific orchestration
 
+Implementation status: complete as of 2026-09-03.
+
 Implement `run_segmentation(request, cancellation)` in `baysor_lib` by moving the
 existing orchestration out of `cmd_run(...)`.
 
@@ -704,6 +717,43 @@ after all temporary algorithm state has been destroyed, the existing N0 CLI
 regression remains green, and no algorithm or scientific default has changed.
 Cancellation-depth, repeated-call, embeddable-consumer, and final CLI-parity
 gates remain explicitly assigned to N3 and N4.
+
+### Native Slice N2b: Harden extraction with a scientific parity matrix
+
+Implementation status: planned as the N2 review follow-up.
+
+N2b tests the algorithm branches whose random-state plumbing changed during N2
+but which are not exercised by the original N0 fixture. It is a focused
+equivalence gate, not an expansion of the segmentation algorithm or a general
+benchmark suite.
+
+Add the following small parity matrix:
+
+1. a 2D fixture containing duplicate coordinates, exercising the jittered graph
+   path through both the unchanged CLI and direct native operation;
+2. a fixture exercising MRF molecule clustering and neighborhood-composition
+   colours through both entry paths;
+3. small Louvain and Leiden direct-call tests covering their seeded NCV basis
+   and clustering dispatch;
+4. a small 3D CLI-versus-direct fixture; and
+5. a focused unit test proving that a legacy default call and the equivalent
+   explicitly supplied legacy seed produce identical random sequences and
+   scientific results.
+
+CLI-versus-direct comparisons remain semantic: molecule identity, noise/cell
+partition, confidence, clustering where applicable, statistics, boundaries,
+counts, and resolved settings are compared without requiring byte-identical
+serialization or identical arbitrary cell-label numbering. Use seed `1` and one
+native thread for the compatibility comparisons. Tests of other seeds should
+assert repeatability and invariants rather than equality to a historical CLI
+result that had no configurable master seed.
+
+Exit criterion: all five cases pass, the existing N0 regression remains green,
+and review finds no unexplained scientific difference between the compatibility
+CLI and direct operation in the covered 2D, 3D, duplicate-coordinate,
+clustering, and NCV paths. Any difference must be explained and accepted before
+N2 is merged; it must not be hidden by broad numerical tolerances or fixture
+regeneration.
 
 ### Native Slice N3: Complete cancellation, lifecycle, and embeddability
 
