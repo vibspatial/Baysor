@@ -151,20 +151,21 @@ Dask Distributed enters as an optional `baysor-python` dependency for the tiled
 execution phases, for example through a `tiled` package extra. Importing and
 using the Phase 1 untiled API must not require that extra.
 
-The authoritative scientific workflow must live in one C++ library operation,
-conceptually `run_segmentation(request) -> result`. The existing CLI becomes a
-thin frontend that parses arguments, calls that operation, and serializes the
-result. The native Python extension calls the same operation, releases the GIL
-during the long-running calculation, and translates C++ failures into documented
-Python exceptions. Neither frontend may duplicate parameter resolution or
-scientific orchestration.
+The authoritative embedding workflow must live in one C++ library operation,
+conceptually `run_segmentation(request) -> result`. The native Python extension
+calls that operation, releases the GIL during the long-running calculation, and
+translates C++ failures into documented Python exceptions. If the existing CLI
+remains a supported product surface, an optional later native slice makes it a
+thin frontend that parses arguments, calls the same operation, and serializes the
+result. That CLI consolidation does not gate the first nanobind integration.
 
 The request includes one 64-bit native `random_seed`, defaulting to `1`. The
 shared operation owns run-local random state and returns the resolved seed in
-provenance. The refactored CLI exposes it as `--seed`; the Python API forwards
-the same field and must not maintain a separate Python random stream for native
-segmentation. Enabling reporting or other optional diagnostics must not consume
-the scientific stream and change assignments.
+provenance. The Python API forwards the same field and must not maintain a
+separate Python random stream for native segmentation. If the optional CLI
+consolidation is implemented, the refactored CLI exposes it as `--seed`.
+Enabling reporting or other optional diagnostics must not consume the scientific
+stream and change assignments.
 
 ```text
                          C++ run_segmentation(...)
@@ -264,9 +265,9 @@ The responsibilities are:
 | --- | --- |
 | Preserve the upstream baseline and native regression fixture | `vibspatial/Baysor` |
 | Define and implement `SegmentationRequest`, `SegmentationResult`, cancellation, and `run_segmentation(...)` | `vibspatial/Baysor` |
-| Extract the scientific pipeline from the CLI and keep the CLI as an adapter | `vibspatial/Baysor` |
+| Extract the scientific pipeline from the CLI; optionally consolidate a supported CLI as an adapter after the core integration | `vibspatial/Baysor` |
 | Provide a reusable CMake library target suitable for embedding | `vibspatial/Baysor` |
-| Test native results, errors, ownership, repeated calls, cancellation, and CLI parity | `vibspatial/Baysor` |
+| Test native results, errors, ownership, repeated calls, cancellation, historical parity, and optional refactored-CLI parity | `vibspatial/Baysor` |
 | Pin the reviewed fork commit and record source/build provenance | `baysor-python` |
 | Build, package, and test the nanobind extension | `baysor-python` |
 | Provide the public Python, SpatialData, and later Dask APIs | `baysor-python` |
@@ -290,10 +291,12 @@ The implementation sequence across the repositories is:
    `vibspatial/Baysor`;
 3. select the reviewed Slice 1A native commit, pin it in `baysor-python`, and
    pass the consumer build smoke check;
-4. refactor and parity-test the CLI in `vibspatial/Baysor`, then advance the
-   `baysor-python` submodule to that reviewed Slice 1B commit; and
-5. build the nanobind extension in `baysor-python` against the final pinned
-   native contract.
+4. build the nanobind extension in `baysor-python` against that pinned native
+   contract and establish the untiled Python API;
+5. implement and hand off the native capabilities required for tiled execution;
+   and
+6. optionally refactor and parity-test the CLI in `vibspatial/Baysor` after the
+   core native and Python integration slices if the CLI remains supported.
 
 ### Packaging and installation model
 
@@ -1602,8 +1605,10 @@ resolved-option fields, invalid-request error handling, cancellation before a
 completed result is published, result ownership after working objects are
 destroyed, and repeated same-process calls without hidden global-state leakage.
 The same-process coverage includes repeated one-thread calls with the same seed
-and verifies that one call does not advance another call's random stream.
-Full pinned-CLI parity is the Slice 1B gate.
+and verifies that one call does not advance another call's random stream. The
+historical semantic references remain the extraction gate. Full
+direct-versus-refactored-CLI parity is required only if optional Slice 1B is
+undertaken.
 
 Native exit criterion: a C++ test can execute a complete segmentation through
 `run_segmentation(...)`, inspect its owned structured scientific result, request
@@ -1632,9 +1637,12 @@ Slice 1A exit criterion: the native operation passes its focused C++ tests in
 `vibspatial/Baysor`, and `baysor-python` pins and verifies the exact reviewed
 commit without local submodule modifications.
 
-#### Slice 1B: Make the CLI a frontend over the shared operation
+#### Slice 1B: Make the CLI a frontend over the shared operation (optional)
 
-This slice is implemented in `vibspatial/Baysor`.
+This slice is implemented in `vibspatial/Baysor` only if the CLI remains a
+supported product surface. It is scheduled after the core native and Python
+integration work and is not a prerequisite for Slices 1C through 1E. Until then,
+the existing CLI remains an independent compatibility and validation path.
 
 Deliverables:
 
@@ -1646,11 +1654,14 @@ Deliverables:
   serializers;
 - compare the refactored CLI with the untouched pinned CLI on the same fixture;
   and
-- after the parity gate passes, advance `baysor-python/vendor/Baysor` to the
-  reviewed Slice 1B integration commit and update its recorded provenance.
+- if the Python distribution requires the completed revision, advance
+  `baysor-python/vendor/Baysor` only after the parity gate passes and update its
+  recorded provenance.
 
-Exit criterion: the refactored CLI is semantically equivalent to the pinned
-reference and contains no second segmentation orchestration path.
+Exit criterion: if this optional slice is undertaken, the refactored CLI is
+semantically equivalent to the pinned reference and contains no second supported
+segmentation orchestration path. If the fork decides not to support the CLI, the
+duplicate path is explicitly deprecated and eventually removed instead.
 
 #### Slice 1C: Add the thin native Python binding
 
@@ -1708,8 +1719,10 @@ requirement.
 The public API calls the bound C++ operation; it does not offer a separate CLI
 backend or executable override.
 
-Exit criterion: `baysor_python.segment(...)` reproduces the refactored CLI on the
-small parity fixture and exposes a documented, stable Python contract.
+Exit criterion: `baysor_python.segment(...)` reproduces the direct pinned native
+operation and the historical semantic reference on the small parity fixture and
+exposes a documented, stable Python contract. If optional Slice 1B has been
+completed, it also reproduces the refactored CLI.
 
 #### Slice 1E: Add the untiled SpatialData adapter
 
@@ -1770,10 +1783,11 @@ All parity paths must use the exact same input files, pinned Baysor revision,
 configuration, OpenMP thread count, output mode, and controllable execution
 settings. The recorded N0 pre-extraction CLI does not expose a seed flag and is
 therefore run as a fresh one-thread process using its implicit seed of `1`. The
-shared native operation, refactored CLI, and Python API expose that same seed
-explicitly; baseline parity uses `random_seed=1`. Multi-threaded comparisons lock
-the thread count and are repeated to characterize scheduling and floating-point
-variability rather than assuming that a seed guarantees bitwise identity.
+shared native operation and Python API expose that same seed explicitly; the
+optional refactored CLI does so if Slice 1B is undertaken. Baseline parity uses
+`random_seed=1`. Multi-threaded comparisons lock the thread count and are
+repeated to characterize scheduling and floating-point variability rather than
+assuming that a seed guarantees bitwise identity.
 
 Comparison includes retained transcript identity, cell/noise assignments,
 molecule confidence, count matrices, cell statistics, resolved parameters, and
@@ -1781,10 +1795,10 @@ the Baysor revision. Cell identifiers and polygon output are compared
 semantically after normalizing harmless relabelling, polygon orientation, and
 starting-vertex differences.
 
-Overall Phase 1 exit criterion: the CLI and native Python API share one C++
-operation, the Python result is semantically equivalent to the pinned CLI result,
-the SpatialData adapter preserves that result, and supported wheels pass their
-release tests.
+Overall Phase 1 exit criterion: the native Python API calls the pinned C++
+operation directly, its result is semantically equivalent to the historical
+reference, the SpatialData adapter preserves that result, and supported wheels
+pass their release tests. A shared CLI frontend is not a Phase 1 gate.
 
 ### Phase 2: Establish the `baysor_python` native boundary API
 
@@ -1911,8 +1925,9 @@ mutually consistent and survive a SpatialData write/read round trip.
 ### Deferred validation milestone: Establish the actual-data reference
 
 This milestone was formerly Phase 0. It is intentionally deferred until Phase 1
-has produced a working native API and small CLI-parity test. It must be completed
-before Phase 7 and before tiled mode can be assigned production defaults.
+has produced a working native API and small historical semantic-parity test. It
+must be completed before Phase 7 and before tiled mode can be assigned production
+defaults.
 
 Run the actual UCB mosaic untiled with the Cellpose nuclei prior and explicit
 initial cell counts. Compare `cluster_method=none` with Louvain on representative
@@ -1993,10 +2008,11 @@ background transcripts, cells without a prior nucleus, and nuclei close to a
 tile boundary.
 
 At the `baysor_python` layer, verify that `segment(...)` matches the direct pinned
-CLI for identical inputs, parameters, output mode, and controllable execution
-settings. The recorded pre-extraction CLI reference runs in a fresh one-thread
-process with its implicit seed `1`; the refactored CLI and Python path use
-explicit seed `1`.
+native operation and recorded pre-extraction CLI reference for identical inputs,
+parameters, output mode, and controllable execution settings. The historical CLI
+reference runs in a fresh one-thread process with its implicit seed `1`; the
+native and Python paths use explicit seed `1`. If optional Slice 1B is completed,
+the refactored CLI joins the same comparison.
 Native tests additionally verify same-seed repeated same-process calls and that
 diagnostic selection does not perturb segmentation. Multi-threaded comparisons
 are repeated when characterizing parallel variability. Verify separately that
@@ -2172,40 +2188,42 @@ production requirement.
 
 ### `baysor_python` and Baysor version drift
 
-A binding release can silently diverge from its reference CLI if source revisions,
-parameter defaults, serializers, or orchestration are not coupled. Every release
-must compile and report one Baysor revision, require the CLI and binding to call
-the same C++ run operation, and test Python-versus-CLI parity on that revision.
+A binding release can silently diverge from its native reference if source
+revisions, parameter defaults, serializers, or orchestration are not coupled.
+Every release must compile and report one Baysor revision and test the Python
+path against that pinned C++ operation and the historical semantic reference. If
+the CLI remains supported after optional consolidation, it must call the same C++
+operation and join the parity test on that revision.
 
 ## Decision
 
 Proceed in the following order:
 
 1. pin Baysor and extract one coarse-grained public C++ segmentation operation;
-2. make the Baysor CLI a thin frontend over that operation and prove parity with
-   the untouched pinned CLI;
-3. expose the shared C++ operation through a thin nanobind module;
-4. establish the typed `baysor_python.segment(...)` API and prove native
-   Python-versus-CLI parity on the small fixture;
-5. add the SpatialData preparation and import adapter and repeat parity through
+2. expose the shared C++ operation through a thin nanobind module;
+3. establish the typed `baysor_python.segment(...)` API and prove parity with the
+   pinned native operation and historical semantic reference;
+4. add the SpatialData preparation and import adapter and repeat parity through
    that complete path;
-6. complete the supported source distribution and platform-wheel release matrix;
-7. expose Baysor boundary estimation as an array-oriented native
+5. complete the supported source distribution and platform-wheel release matrix;
+6. expose Baysor boundary estimation as an array-oriented native
    `baysor_python` API and verify CLI parity;
-8. implement optional Python-orchestrated core-plus-halo tiling as the reusable
+7. implement optional Python-orchestrated core-plus-halo tiling as the reusable
    Dask-backed `baysor_python.segment_tiled(...)` workflow, while keeping its tile
    and result contracts independent of Dask collections;
-9. implement shared-transcript reconciliation, conservative rescue, and final
+8. implement shared-transcript reconciliation, conservative rescue, and final
    boundary estimation inside that `baysor_python` workflow;
-10. provide a locally owned, Nanny-supervised Dask cluster for native tile calls,
+9. provide a locally owned, Nanny-supervised Dask cluster for native tile calls,
     first validate one worker and one tile at a time, then add bounded multi-worker
     execution with explicit CPU and memory admission, accept a compatible
     caller-managed client, recycle workers after tile attempts, and construct
     reconciled SpatialData results;
-11. establish the deferred untiled actual-UCB reference after Phase 1 and no later
+10. establish the deferred untiled actual-UCB reference after Phase 1 and no later
    than immediately before tiled-quality validation; and
-12. promote tiled mode only after it matches the untiled reference and passes
-   untiled-repeat, halo, seam, and grid-shift validation.
+11. promote tiled mode only after it matches the untiled reference and passes
+    untiled-repeat, halo, seam, and grid-shift validation; and
+12. optionally make the Baysor CLI a thin frontend over the shared native
+    operation, with full historical parity, if the CLI remains supported.
 
 Tiling is therefore a planned scalability capability, not the default for the
 current 47-million-transcript sample. The architecture must nevertheless make

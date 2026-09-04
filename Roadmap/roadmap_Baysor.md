@@ -147,8 +147,8 @@ pipeline constructs additional Eigen and BMM working storage. A straightforward
 array binding would therefore still copy the eager Python data into Baysor-owned
 memory. Making that route genuinely zero-copy would require a broader refactor of
 loading, filtering, compaction, gene encoding, matrix construction, and borrowed
-buffer lifetimes. N1 through N4 must not combine the segmentation extraction with
-that data-model refactor.
+buffer lifetimes. This native roadmap does not combine segmentation extraction or
+CLI consolidation with that data-model refactor.
 
 The initial file route instead reuses the existing native Arrow/Parquet loader as
 the one canonical implementation of projection, filtering, gene encoding, prior
@@ -199,8 +199,9 @@ captured:
   consume the scientific stream and change assignments;
 - the resolved seed and effective OpenMP settings are returned in provenance;
   and
-- the refactored CLI exposes the same setting as `--seed`, while the Python
-  frontend forwards that native setting rather than defining another seed.
+- the Python frontend forwards that native setting rather than defining another
+  seed; if optional N4 is undertaken, the refactored CLI exposes the same setting
+  as `--seed`.
 
 For the same input, options, build, platform, seed, and single-thread execution,
 repeated calls must produce the same semantic result, including repeated calls
@@ -225,29 +226,33 @@ combined roadmap is explicit so that the two documents cannot silently diverge.
 | N2: Scientific orchestration extraction | Slice 1A.1 | None |
 | N2b: Scientific parity matrix | N2 review and merge hardening | None |
 | N3: Native lifecycle and embeddability gate | Slice 1A.1 | `baysor-python` pins the reviewed commit in Slice 1A.2 |
-| N4: CLI frontend and parity | Slice 1B | `baysor-python` advances to the reviewed parity commit |
 | N5: Public boundary operation | Native portion of Phase 2 | `baysor-python` binds the reviewed operation |
 | N6: Stable transcript identity | Tiled correctness prerequisite | `baysor-python` removes any row-order compatibility path |
 | N7: Selective native products | Tiled performance optimization | Tile calls request only authoritative products |
 | N8: Reusable confidence/noise calibration | Tiled production prerequisite | Tile calls apply one global calibration |
 | N9: Reusable graph calibration, if required | Conditional tiled-quality mitigation | Implement only when validation supplies evidence |
+| N4: Optional CLI frontend and parity | Optional CLI compatibility consolidation, scheduled last | No binding gate; advance the pin only if the completed CLI refactor is needed |
 
 The dependency order is:
 
 ```text
-N0 -> N1 -> N2 -> N2b -> N3 -> N4
+N0 -> N1 -> N2 -> N2b -> N3 -> first baysor-python native pin and binding
                                 |
                                 +-> N5 -> native boundary handoff
                                 +-> N6 -> stable-identity handoff
                                 +-> N7 -> selective-output handoff
                                 +-> N8 -> global-calibration handoff
-                                             |
-                                             +-> N9 only if validation requires it
+                                |            |
+                                |            +-> N9 only if validation requires it
+                                |
+                                +-> N4 optional CLI consolidation, scheduled last
 ```
 
-N5 through N8 may be developed as separate branches after N4. They must each
-retain the N4 CLI-parity gate and be handed to `baysor-python` as explicit commit
-updates.
+N5 through N8 may be developed as separate branches after the reviewed N3
+handoff; they do not wait for N4. They must retain the applicable direct-native
+and historical semantic-parity gates and be handed to `baysor-python` as
+explicit commit updates. N4 is intentionally not on the critical path for the
+first nanobind integration or the tiled capabilities.
 
 ## Immediate next work
 
@@ -289,8 +294,11 @@ entry contexts. `baysor::baysor` is a position-independent CMake consumer target
 and the independent `tests/cmake_consumer` project configures, links, and runs
 without building the CLI.
 
-The next implementation slice is N4, which makes the CLI a frontend over the
-shared operation and repeats the semantic parity gates.
+The next cross-repository step is to review and pin the N3 native API in
+`baysor-python`, then establish the first nanobind integration against that exact
+commit. Native slices N5 through N8 can proceed from the reviewed N3 handoff as
+their product dependencies require. N4 is deferred to the end of the native
+sequence and remains optional.
 
 The deferred actual-UCB experiment remains outside this sequence.
 
@@ -369,7 +377,7 @@ Exit criterion: a clean checkout can configure, build, and run its native tests,
 the small input, locked configuration, reference output, and portable generation
 recipe are versioned, the recorded pre-extraction CLI can reproduce the semantic
 result under those settings, and one focused automated comparator is ready to
-gate N1 through N4.
+gate later native work, including optional N4 if it is undertaken.
 
 ### Native Slice N1: Define the public segmentation contracts
 
@@ -410,9 +418,10 @@ and error contracts and separates them from native implementation details.
 
 At the end of N1, the public native types and function declaration exist, but
 the function has no scientific implementation yet. N2 makes the native call
-operational, N4 changes the CLI to use it, and Python Slices 1C and 1D add the
-private binding and public Python entry point respectively. No Python-callable
-API is implemented in this repository.
+operational, N3 makes it ready for an embedding consumer, and Python Slices 1C
+and 1D add the private binding and public Python entry point respectively.
+Optional N4 may later change the CLI to use the same operation; it does not gate
+those Python slices. No Python-callable API is implemented in this repository.
 
 #### Request contract
 
@@ -690,8 +699,9 @@ embeddability hardening belong to N3.
 
 N2 establishes the authoritative direct library path without claiming that the
 CLI refactor is complete. The existing N0 CLI regression must remain green while
-the operation is extracted. N4 then reduces `cmd_run(...)` to a frontend over
-the operation, removes any remaining duplicate orchestration, and performs the
+the operation is extracted. If optional N4 is undertaken after the native and
+Python integration slices, it reduces `cmd_run(...)` to a frontend over the
+operation, removes the remaining duplicate CLI orchestration, and performs the
 full pre-extraction CLI-parity gate.
 
 Deliverables:
@@ -735,8 +745,9 @@ on byte-identical serialization.
 Exit criterion: the direct native test passes, the returned data remains valid
 after all temporary algorithm state has been destroyed, the existing N0 CLI
 regression remains green, and no algorithm or scientific default has changed.
-Cancellation-depth, repeated-call, embeddable-consumer, and final CLI-parity
-gates remain explicitly assigned to N3 and N4.
+Cancellation-depth, repeated-call, and embeddable-consumer gates remain assigned
+to N3. Final CLI-consolidation parity belongs to optional N4 if that slice is
+undertaken.
 
 ### Native Slice N2b: Harden extraction with a scientific parity matrix
 
@@ -999,44 +1010,6 @@ Handoff: select and review the green N3 commit. `baysor-python` pins that exact
 commit as its Slice 1A.2 source dependency and records both the upstream baseline
 and fork commit.
 
-### Native Slice N4: Make the CLI a frontend over the shared operation
-
-Refactor the CLI only after the direct native operation is established.
-
-Deliverables:
-
-- reduce `cmd_run(...)` to CLI/config parsing, construction of
-  `SegmentationRequest`, invocation of `run_segmentation(...)`, shared
-  serialization, user-facing reporting, and conversion of outcomes to exit
-  codes;
-- remove every second implementation of data-dependent parameter resolution or
-  scientific orchestration from the CLI;
-- preserve existing supported command-line arguments, configuration behaviour,
-  output naming, and default full-output behaviour;
-- expose `--seed` as the CLI spelling of the shared 64-bit `random_seed`, default
-  it to `1`, and record its resolved value in run provenance;
-- compare the refactored CLI with the recorded pre-extraction CLI on the N0
-  fixture using seed `1`, the same inputs, options, one-thread OpenMP
-  configuration, and output mode; and
-- retain reference and candidate logs and resolved options as parity evidence.
-
-Parity includes retained transcript identity, cell/noise assignments, molecule
-confidence, count matrices, cell statistics, resolved parameters, and Baysor
-revision. Cell identifiers and polygons are compared semantically after
-normalizing harmless relabelling, polygon orientation, and starting-vertex
-differences. Because the pre-extraction CLI has no general segmentation seed,
-parity runs compare its implicit seed-`1` stream with the refactored CLI's
-explicit `--seed 1` stream in one-thread mode. Multi-threaded runs remain a
-separate repeatability characterization and must not be assumed bitwise
-deterministic merely because they use the same seed.
-
-Exit criterion: the refactored CLI is semantically equivalent to the reference
-CLI and contains no scientific orchestration path independent of
-`run_segmentation(...)`.
-
-Handoff: `baysor-python` advances its pinned source to the reviewed N4 commit
-before implementing or releasing the native Python binding.
-
 ### Native Slice N5: Establish a reusable boundary operation
 
 Expose the existing boundary semantics as a stable, independently callable C++
@@ -1167,17 +1140,70 @@ If triggered, deliverables are:
   globally calibrated graph parameters;
 - parameter validation and provenance;
 - unchanged default untiled behaviour; and
-- partitioned-versus-global application tests plus CLI-parity coverage.
+- partitioned-versus-global application tests plus historical semantic parity;
+  if optional N4 has been completed, retain its CLI-parity coverage as well.
 
 Exit criterion: all tile calls can apply the same validated graph calibration
 without changing the reference untiled default path.
+
+### Native Slice N4: Make the CLI a frontend over the shared operation (optional)
+
+Implementation status: optional and deferred to the end of the native sequence.
+
+N4 is not required for the N3 native handoff, the first nanobind module, the
+untiled Python API, or the tiled capabilities. While it is deferred, the existing
+CLI remains a compatibility and independent validation path; the public
+`run_segmentation(...)` operation is the authoritative embedding path for
+`baysor-python`.
+
+This slice should be undertaken if the CLI remains a supported product surface.
+It then reduces long-term maintenance by making the CLI and Python frontend share
+one scientific orchestration. If this fork instead decides not to support the
+CLI, the duplicate segmentation path should be explicitly deprecated and
+eventually removed rather than maintained indefinitely.
+
+Deliverables:
+
+- reduce `cmd_run(...)` to CLI/config parsing, construction of
+  `SegmentationRequest`, invocation of `run_segmentation(...)`, shared
+  serialization, user-facing reporting, and conversion of outcomes to exit
+  codes;
+- remove every second implementation of data-dependent parameter resolution or
+  scientific orchestration from the supported CLI;
+- preserve existing supported command-line arguments, configuration behaviour,
+  output naming, and default full-output behaviour;
+- expose `--seed` as the CLI spelling of the shared 64-bit `random_seed`, default
+  it to `1`, and record its resolved value in run provenance;
+- compare the refactored CLI with the recorded pre-extraction CLI on the N0
+  fixture using seed `1`, the same inputs, options, one-thread OpenMP
+  configuration, and output mode; and
+- retain reference and candidate logs and resolved options as parity evidence.
+
+Parity includes retained transcript identity, cell/noise assignments, molecule
+confidence, count matrices, cell statistics, resolved parameters, and Baysor
+revision. Cell identifiers and polygons are compared semantically after
+normalizing harmless relabelling, polygon orientation, and starting-vertex
+differences. Because the pre-extraction CLI has no general segmentation seed,
+parity runs compare its implicit seed-`1` stream with the refactored CLI's
+explicit `--seed 1` stream in one-thread mode. Multi-threaded runs remain a
+separate repeatability characterization and must not be assumed bitwise
+deterministic merely because they use the same seed.
+
+Exit criterion: if N4 is undertaken, the refactored CLI is semantically
+equivalent to the reference CLI and contains no scientific orchestration path
+independent of `run_segmentation(...)`.
+
+Handoff: there is no N4 prerequisite for the first `baysor-python` binding. If
+N4 is completed later and the Python distribution requires that revision,
+`baysor-python` advances its native pin only after the CLI parity gate passes.
 
 ## Cross-repository handoff contract
 
 Every native handoff follows the same sequence:
 
 1. implement and run focused tests in `vibspatial/Baysor`;
-2. pass the applicable direct-native and CLI-parity gates;
+2. pass the applicable direct-native and historical semantic-parity gates, plus
+   CLI parity when the handoff changes a supported CLI path;
 3. review and commit the native change here;
 4. select the exact green integration commit;
 5. advance `baysor-python/vendor/Baysor` to that commit; and
@@ -1191,8 +1217,9 @@ made and tested here, followed by a new commit-based handoff.
 ## Native test strategy
 
 Each slice runs only the focused native tests needed for its change during
-development. The complete native suite and pre-extraction CLI parity fixture are
-release and handoff gates.
+development. The complete native suite and semantic comparison with the
+pre-extraction reference are release and handoff gates. Direct-versus-refactored
+CLI parity becomes an additional gate only if optional N4 is undertaken.
 
 Required coverage across the sequence includes:
 
@@ -1208,7 +1235,8 @@ Required coverage across the sequence includes:
 - proof that diagnostic-product selection does not change scientific assignments
   by consuming the run's scientific random stream;
 - resolved-seed and effective-thread provenance;
-- serializer consistency between direct and CLI paths;
+- serializer consistency for the direct result and, if optional N4 is
+  undertaken, between the direct and CLI paths;
 - semantic parity with the recorded pre-extraction CLI;
 - boundary edge cases, sparse cell identifiers, target-cell batches, and
   thread-count stability;
@@ -1231,7 +1259,9 @@ A native slice is complete only when:
 - the change introduces no Python or application-layer dependency;
 - default CLI scientific behaviour remains unchanged unless the roadmap
   explicitly authorizes and validates a change;
-- the implementation has one authoritative scientific path;
+- the implementation has one authoritative scientific library path for native
+  and Python consumers; if the CLI remains a supported product surface, optional
+  N4 must eventually make it a frontend over that path;
 - ownership, cancellation, logging, and process-global behaviour are safe for an
   embedding process; and
 - the reviewed commit is suitable for an auditable, exact consumer pin.
