@@ -279,8 +279,18 @@ versioned pre-N2 references and generation recipe live under
 match the duplicate-coordinate, MRF, Louvain, Leiden, and 3D references; focused
 tests also cover legacy-seed equivalence and the NCV-colour product boundary.
 
-The next implementation slice is N3, which completes cancellation-depth,
-repeated-call lifecycle, and embedding-consumer hardening.
+Native Slice N3 is complete in the current working tree as of 2026-09-04. The
+operation now checks cancellation between major phases and at complete BMM
+iteration boundaries, restores caller OpenMP state on every exit path, rejects
+nested OpenMP and overlapping same-process calls, and records unambiguous
+OpenMP and Arrow execution provenance. Focused lifecycle tests cover structured
+failures, cancellation, repeated calls, thread restoration, and unsupported
+entry contexts. `baysor::baysor` is a position-independent CMake consumer target,
+and the independent `tests/cmake_consumer` project configures, links, and runs
+without building the CLI.
+
+The next implementation slice is N4, which makes the CLI a frontend over the
+shared operation and repeats the semantic parity gates.
 
 The deferred actual-UCB experiment remains outside this sequence.
 
@@ -483,8 +493,9 @@ The documented contract must state:
 
 The outcome type must therefore make success and cancellation structurally
 distinct, for example through a variant of `SegmentationResult` and a dedicated
-`SegmentationCancelled` value. N2 adds the safe phase and BMM-iteration
-checkpoints that act on this contract.
+`SegmentationCancelled` value. N2 begins using this contract in the extracted
+operation. N3 completes the safe major-phase and BMM-iteration checkpoints that
+act on it.
 
 #### Randomness and errors
 
@@ -844,6 +855,8 @@ regeneration.
 
 ### Native Slice N3: Complete cancellation, lifecycle, and embeddability
 
+Implementation status: complete as of 2026-09-04.
+
 Harden the extracted operation for repeated in-process use and hand it off as a
 clean CMake consumer target.
 
@@ -917,6 +930,25 @@ request cancellation from a control thread, but the native call returns only
 after it reaches a safe checkpoint; the token does not forcibly terminate an
 OpenMP team. Hard termination and complete allocator-memory reclamation remain
 worker-supervisor policies based on process isolation, outside this native API.
+
+N3 implements only the native half of that cancellation path: the shared atomic
+state, source/token ownership, token propagation, safe polling checkpoints, and
+distinct cancelled outcome. Baysor C++ does not listen to Python, Dask, operating
+system signals, or a Dask `Future` directly. In particular, calling
+`Future.cancel()` does not by itself invoke
+`CancellationSource::request_cancellation()` or set the token observed by the
+running native operation.
+
+`baysor-python` must provide the other half. Its nanobind adapter retains the
+`CancellationSource` in a worker-side active-attempt registry, releases the GIL
+around `run_segmentation(...)`, and exposes a control path that reaches the same
+worker process and invokes `request_cancellation()` from a separate control
+thread. The Dask coordinator must use that explicit bridge and wait for the
+distinct cancelled outcome for a bounded grace period. If the request cannot
+reach the worker or Baysor does not reach a safe checkpoint in time, the Nanny
+terminates and replaces the dedicated worker process. Implementing and testing
+that registry, control protocol, timeout, and supervisor fallback belongs to
+`baysor-python`, not N3 in this repository.
 
 Deliverables:
 

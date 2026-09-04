@@ -1,12 +1,18 @@
 cmake_minimum_required(VERSION 3.20)
 project(baysor VERSION 0.8.3 LANGUAGES C CXX)
 
+if(CMAKE_SOURCE_DIR STREQUAL PROJECT_SOURCE_DIR)
+    set(BAYSOR_IS_TOP_LEVEL ON)
+else()
+    set(BAYSOR_IS_TOP_LEVEL OFF)
+endif()
+
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # Keep default installs user-owned. Presets and explicit command-line values can
 # still override this with CMAKE_INSTALL_PREFIX or cmake --install --prefix.
-if(CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT)
+if(BAYSOR_IS_TOP_LEVEL AND CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT)
     set(CMAKE_INSTALL_PREFIX "${CMAKE_CURRENT_SOURCE_DIR}/install" CACHE PATH "Default Baysor install prefix." FORCE)
 endif()
 
@@ -46,6 +52,7 @@ endif()
 option(BAYSOR_WITH_CUDA "Enable CUDA/GPU support" OFF)
 option(BAYSOR_WITH_TESTS "Build tests" OFF)
 option(BAYSOR_WITH_REPORTING "Build reporting/visualization support" ON)
+option(BAYSOR_BUILD_CLI "Build the Baysor command-line executable" ${BAYSOR_IS_TOP_LEVEL})
 
 # Dependencies managed by vcpkg or find_package
 # Core (always required)
@@ -244,13 +251,16 @@ add_library(baysor_lib
     src/reporting/preview_report.cpp
     src/reporting/run_report.cpp
 )
+add_library(baysor::baysor ALIAS baysor_lib)
+set_target_properties(baysor_lib PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 add_library(baysor_umap_wrappers STATIC
     src/processing/data_processing/umap_wrappers.cpp
 )
+set_target_properties(baysor_umap_wrappers PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 target_include_directories(baysor_umap_wrappers PUBLIC
-    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
 )
 
 target_link_libraries(baysor_umap_wrappers PUBLIC
@@ -260,9 +270,10 @@ target_link_libraries(baysor_umap_wrappers PUBLIC
 )
 
 target_include_directories(baysor_lib PUBLIC
-    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
     ${BAYSOR_HDF5_INCLUDE_DIRS}
 )
+target_compile_features(baysor_lib PUBLIC cxx_std_17)
 
 set(BAYSOR_BUILD_REVISION "unknown" CACHE STRING "Source revision recorded in native run provenance")
 target_compile_definitions(baysor_lib PRIVATE
@@ -295,15 +306,17 @@ if(BAYSOR_WITH_CUDA)
 endif()
 
 # --- Executable ---
-add_executable(baysor
-    src/cli/main.cpp
-)
+if(BAYSOR_BUILD_CLI OR BAYSOR_WITH_TESTS)
+    add_executable(baysor
+        src/cli/main.cpp
+    )
 
-target_link_libraries(baysor PRIVATE baysor_lib)
-install(TARGETS baysor RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+    target_link_libraries(baysor PRIVATE baysor_lib)
+    install(TARGETS baysor RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 
-if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
-    target_compile_options(baysor PRIVATE -Wno-stringop-overflow)
+    if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+        target_compile_options(baysor PRIVATE -Wno-stringop-overflow)
+    endif()
 endif()
 
 # --- Tests ---
@@ -319,6 +332,7 @@ if(BAYSOR_WITH_TESTS)
         tests/test_main.cpp
         tests/native_baseline_test.cpp
         tests/segmentation_contract_test.cpp
+        tests/segmentation_lifecycle_test.cpp
     )
     add_dependencies(baysor_tests baysor)
     target_link_libraries(baysor_tests PRIVATE baysor_lib GTest::gtest_main)

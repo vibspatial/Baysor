@@ -31,6 +31,7 @@ TEST(SegmentationContract, RequestDefaultsDescribeACompletePathOrientedRun) {
     EXPECT_EQ(request.prior.type, baysor::PriorInputType::None);
     EXPECT_EQ(request.random_seed, baysor::kDefaultSegmentationSeed);
     EXPECT_EQ(request.execution.native_threads, 0);
+    EXPECT_TRUE(request.execution.use_arrow_threads);
 
     EXPECT_TRUE(request.requested_products.molecule_assignments);
     EXPECT_TRUE(request.requested_products.molecule_confidence);
