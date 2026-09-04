@@ -767,8 +767,7 @@ Add the following small parity matrix:
 1. a 2D fixture containing duplicate coordinates, exercising the jittered graph
    path through the pre-N2 reference, current legacy CLI, and direct native
    operation;
-2. a fixture exercising MRF molecule clustering and neighborhood-composition
-   colours through all three paths;
+2. a fixture exercising MRF molecule clustering through all three paths;
 3. small parameterized Louvain and Leiden cases covering their seeded NCV basis,
    clustering dispatch, molecule-cluster assignments, and downstream
    segmentation through all three paths;
@@ -778,23 +777,58 @@ Add the following small parity matrix:
    explicitly supplied legacy seed produce identical random sequences and
    scientific results.
 
+#### NCV scientific and representation boundary
+
+N2b distinguishes the neighborhood-composition features used by the scientific
+workflow from the hexadecimal colours derived from them:
+
+```text
+neighborhood-composition vectors
+            |
+            +-- Louvain/Leiden clustering -> molecule types -> BMM
+            |
+            +-- UMAP/interpolation -> Lab/RGB -> per-molecule hex colours
+```
+
+The first path is scientific. Louvain and Leiden molecule-cluster assignments
+and their downstream cell/noise partition, confidence, counts, statistics, and
+boundaries must match the pre-N2 reference. MRF clustering does not consume the
+NCV representation and is tested independently.
+
+The second path is a post-segmentation visualization product. Its absolute UMAP
+orientation and resulting `#RRGGBB` values have no stable biological identity
+and may be sensitive to numerical library, compiler, or platform differences.
+Exact NCV colour strings and UMAP coordinates are therefore excluded from the
+historical scientific parity oracle.
+
+Exclusion from the historical oracle does not remove product coverage. Focused
+tests must verify that requesting NCV colours returns one well-formed colour per
+retained molecule, is repeatable for the same build, input, seed, and one-thread
+configuration, and does not change molecule clusters, cell/noise assignments,
+confidence, counts, statistics, or boundaries compared with an otherwise
+identical request that omits colours. These tests validate the colour-product
+contract and the separation of diagnostic randomness without treating an
+absolute colour as a scientific result.
+
 Reference comparisons remain semantic: molecule identity, noise/cell partition,
-confidence, clustering and NCV-derived fields where applicable, statistics,
-boundaries, counts, and resolved settings are compared without requiring
-byte-identical serialization or identical arbitrary cell-label numbering. The
-existing N0 comparators should be reused or minimally generalized; N2b does not
-create a general-purpose comparison framework. Use seed `1` and one native
-thread for the compatibility comparisons. Tests of other seeds should assert
-repeatability and invariants rather than equality to a historical CLI result
-that had no configurable master seed.
+confidence, molecule clustering where applicable, statistics, boundaries,
+counts, and resolved settings are compared without requiring byte-identical
+serialization or identical arbitrary cell-label numbering. The existing N0
+comparators should be reused or minimally generalized; N2b does not create a
+general-purpose comparison framework. Use seed `1` and one native thread for the
+compatibility comparisons. Tests of other seeds should assert repeatability and
+invariants rather than equality to a historical CLI result that had no
+configurable master seed.
 
 Exit criterion: every new pre-N2 reference is reproducible under its locked
 settings, both the current legacy CLI and direct operation match it semantically,
 the supporting legacy-seed test passes, and the existing N0 regression remains
 green. Review finds no unexplained scientific difference in the covered 2D, 3D,
-duplicate-coordinate, MRF, Louvain, Leiden, or NCV paths. Any difference must be
-explained and accepted before N2 is merged; it must not be hidden by broad
-numerical tolerances or fixture regeneration.
+duplicate-coordinate, MRF, Louvain, Leiden, or NCV-based clustering paths; the
+NCV colour product also passes its shape, repeatability, and scientific
+non-interference tests. Any difference must be explained and accepted before N2
+is merged; it must not be hidden by broad numerical tolerances or fixture
+regeneration.
 
 ### Native Slice N3: Complete cancellation, lifecycle, and embeddability
 
