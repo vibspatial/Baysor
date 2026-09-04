@@ -264,7 +264,11 @@ NoiseFitResult fit_noise_probabilities(
 // ============================================================================
 
 ConfidenceEstimationDetails estimate_confidence_details(
-    const MoleculeData& data, int nn_id, double prior_confidence
+    const MoleculeData& data,
+    int nn_id,
+    double prior_confidence,
+    Xoshiro256pp* random_state,
+    bool verbose
 ) {
     int n = data.n_molecules();
     if (n == 0) return {};
@@ -286,7 +290,10 @@ ConfidenceEstimationDetails estimate_confidence_details(
     }
 
     // Build molecule graph (unfiltered, matching Julia)
-    auto adj_list = build_molecule_graph(data, /*filter=*/false);
+    auto adj_list = build_molecule_graph(
+        data, /*filter=*/false, /*use_local_gene_similarities=*/false,
+        AdjacencyType::Auto, /*composition_neighborhood=*/0, /*n_gene_pcs=*/0,
+        random_state);
 
     // Compute min_confidence from prior segmentation if available
     std::vector<double> min_conf;
@@ -302,10 +309,12 @@ ConfidenceEstimationDetails estimate_confidence_details(
 
     // Fit noise model
     auto result = fit_noise_probabilities(mean_dists, adj_list, min_conf_ptr,
-                                          /*max_iters=*/10000, /*tol=*/0.005, /*verbose=*/true);
+                                          /*max_iters=*/10000, /*tol=*/0.005, verbose);
 
-    spdlog::info("Noise estimation: signal mu={:.4g}, sigma={:.4g}; noise mu={:.4g}, sigma={:.4g}",
-                 result.signal_mu, result.signal_sigma, result.noise_mu, result.noise_sigma);
+    if (verbose) {
+        spdlog::info("Noise estimation: signal mu={:.4g}, sigma={:.4g}; noise mu={:.4g}, sigma={:.4g}",
+                     result.signal_mu, result.signal_sigma, result.noise_mu, result.noise_sigma);
+    }
 
     ConfidenceEstimationDetails details;
     details.edge_lengths = std::move(mean_dists);
@@ -314,8 +323,15 @@ ConfidenceEstimationDetails estimate_confidence_details(
     return details;
 }
 
-void append_confidence(MoleculeData& data, int nn_id, double prior_confidence) {
-    auto details = estimate_confidence_details(data, nn_id, prior_confidence);
+void append_confidence(
+    MoleculeData& data,
+    int nn_id,
+    double prior_confidence,
+    Xoshiro256pp* random_state,
+    bool verbose
+) {
+    auto details = estimate_confidence_details(
+        data, nn_id, prior_confidence, random_state, verbose);
     int n = data.n_molecules();
     data.confidence.resize(n);
     for (int i = 0; i < n; ++i) {

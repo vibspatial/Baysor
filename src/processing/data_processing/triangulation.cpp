@@ -18,7 +18,7 @@ namespace baysor {
 // normalize_points
 // ============================================================================
 
-Eigen::MatrixXd normalize_points(const Eigen::MatrixXd& points) {
+Eigen::MatrixXd normalize_points(const Eigen::MatrixXd& points, Xoshiro256pp* random_state) {
     const int dims = static_cast<int>(points.rows());
     const int n = static_cast<int>(points.cols());
     if (n == 0) return points;
@@ -41,7 +41,7 @@ Eigen::MatrixXd normalize_points(const Eigen::MatrixXd& points) {
     // Jitter duplicate points (KNN with distance=0 creates self-loops)
     if (n > 1) {
         auto knn = knn_parallel(out, out, 2, true);
-        auto& rng = global_xoshiro_rng();
+        auto& rng = random_state != nullptr ? *random_state : global_xoshiro_rng();
         for (int i = 0; i < n; ++i) {
             if (knn.distances[i].size() >= 2 && knn.distances[i][1] < 1e-6) {
                 for (int d = 0; d < dims; ++d) {
@@ -115,7 +115,8 @@ AdjacencyResult adjacency_list(
     bool filter,
     double n_mads,
     int k_adj,
-    AdjacencyType type
+    AdjacencyType type,
+    Xoshiro256pp* random_state
 ) {
     const int dims = static_cast<int>(points.rows());
     const int n = static_cast<int>(points.cols());
@@ -130,7 +131,7 @@ AdjacencyResult adjacency_list(
         type = AdjacencyType::Knn; // 3D only supports KNN
     }
 
-    Eigen::MatrixXd norm_pts = normalize_points(points);
+    Eigen::MatrixXd norm_pts = normalize_points(points, random_state);
 
     std::vector<std::pair<int, int>> tri_edges;
     std::vector<std::pair<int, int>> knn_edges;

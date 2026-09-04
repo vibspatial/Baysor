@@ -793,7 +793,8 @@ NcvBasisModel fit_ncv_basis_model(
     const std::vector<double>& confidence,
     int k_neighbors,
     int basis_sample_size,
-    int n_components
+    int n_components,
+    unsigned int random_seed
 ) {
     NcvBasisModel model;
     model.spatial_k = k_neighbors;
@@ -811,7 +812,8 @@ NcvBasisModel fit_ncv_basis_model(
         }
     }
 
-    model.gene_emb_t = estimate_gene_vectors(anchor_cm, genes, n_components, "ri", false);
+    model.gene_emb_t = estimate_gene_vectors(
+        anchor_cm, genes, n_components, "ri", false, random_seed);
     model.basis_vecs = project_gene_vectors(model.gene_emb_t, anchor_cm);
     return model;
 }
@@ -824,11 +826,13 @@ NcvProjectedModel fit_ncv_projected_model(
     int k_neighbors,
     int basis_sample_size,
     int n_components,
-    bool include_full_projection
+    bool include_full_projection,
+    unsigned int random_seed
 ) {
     NcvProjectedModel model;
     model.basis = fit_ncv_basis_model(
-        pos_data, genes, n_genes, confidence, k_neighbors, basis_sample_size, n_components
+        pos_data, genes, n_genes, confidence, k_neighbors, basis_sample_size, n_components,
+        random_seed
     );
     if (!include_full_projection || model.basis.gene_emb_t.cols() == 0) return model;
 

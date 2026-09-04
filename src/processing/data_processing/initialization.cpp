@@ -87,12 +87,14 @@ AdjList build_molecule_graph(
     bool use_local_gene_similarities,
     AdjacencyType type,
     int composition_neighborhood,
-    int n_gene_pcs
+    int n_gene_pcs,
+    Xoshiro256pp* random_state
 ) {
     Eigen::MatrixXd pos = data.position_matrix();
     int n = static_cast<int>(pos.cols());
 
-    auto adj_result = adjacency_list(pos, filter, /*n_mads=*/2.0, /*k_adj=*/5, type);
+    auto adj_result = adjacency_list(
+        pos, filter, /*n_mads=*/2.0, /*k_adj=*/5, type, random_state);
 
     int n_edges = static_cast<int>(adj_result.edge_src.size());
     if (n_edges == 0) {
