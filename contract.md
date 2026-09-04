@@ -114,7 +114,7 @@ owning result; internal graphs, clustering models, and BMM state do not escape.
 | `neighborhood_composition` | `NeighborhoodCompositionOptions` | Size `0`, method `"ri"` | Scientific neighborhood-composition settings |
 | `requested_products` | `SegmentationProducts` | Every product requested | Scientific products the caller wants materialized |
 | `random_seed` | `std::uint64_t` | `1` | Master seed for the versioned native random-stream contract |
-| `execution` | `SegmentationExecutionOptions` | Native threads `0` | Native resource request |
+| `execution` | `SegmentationExecutionOptions` | OpenMP threads `0`, Arrow threads enabled | Native resource request |
 
 Sentinel values such as automatic scale or cell-count selection remain
 unresolved in the request. `run_segmentation(...)` resolves them once, using the
@@ -186,10 +186,12 @@ NumPy array, pandas DataFrame, PyArrow table, or Dask collection.
 `NeighborhoodCompositionOptions` contains `neighborhood_size` with default `0`
 and `method` with default `"ri"`.
 
-`SegmentationExecutionOptions::native_threads` controls the requested native
-thread configuration. A positive value requests that number of threads, `0`
-leaves selection to the configured native runtime, and a negative value is
-invalid.
+`SegmentationExecutionOptions::native_threads` controls Baysor's call-scoped
+OpenMP maximum. A positive value requests that number of threads, `0` inherits
+the caller's configured OpenMP maximum, and a negative value is invalid.
+`use_arrow_threads` independently enables or disables Arrow's parallel CSV and
+Parquet decoding and defaults to `true`. It does not set the size of Arrow's
+process-global CPU pool, and `native_threads` does not include Arrow threads.
 
 ### Requested products
 
@@ -221,10 +223,16 @@ versioned `RandomSubstream` contract. The default master seed `1` maps the core
 stream to seed `1` and the other established subsystem streams to seed `42`,
 preserving the one-thread compatibility baseline.
 
-A positive `native_threads` value configures OpenMP for the duration of the call
-and the previous setting is restored before return; zero uses the runtime's
-configured selection. `provenance.effective_native_threads` records the observed
-setting.
+A positive `native_threads` value configures the OpenMP maximum for the duration
+of the call; zero inherits the caller's current value. The previous OpenMP
+maximum and dynamic-team policy are restored on success, cancellation, and
+failure. Baysor inherits dynamic-team adjustment rather than disabling it.
+
+Provenance deliberately does not claim to record an effective or observed team
+size. `requested_native_threads` is the request (`0` still means inherit),
+`configured_openmp_max_threads` is the maximum reported by OpenMP after applying
+that request, and `openmp_dynamic_enabled` records whether OpenMP may use a
+smaller team. `arrow_threads_enabled` records the independent I/O policy.
 
 The public reproducibility contract is:
 
@@ -244,9 +252,33 @@ identical serialization order, or cross-platform bitwise equality.
 Callers that require deterministic replay must explicitly set
 `native_threads = 1`; leaving it at `0` does not provide that guarantee because
 the runtime may select multiple threads. Every completed run records the master
-seed, random-stream contract version, derived stream seeds, and effective native
-thread setting in `SegmentationResult::provenance`. Consumers comparing tiled or
-distributed runs should lock and record both the seed and thread configuration.
+seed, random-stream contract version, derived stream seeds, requested and
+configured OpenMP settings, dynamic-team policy, and Arrow I/O policy in
+`SegmentationResult::provenance`. Consumers comparing tiled or distributed runs
+should lock and record both the seed and execution configuration.
+
+### Entry context and concurrency
+
+`run_segmentation(...)` must be entered from outside an active OpenMP parallel
+region. A nested call is rejected before Baysor changes the caller's OpenMP
+configuration. Sequential calls in one process are supported; concurrent calls
+in the same process are rejected immediately with
+`UnsupportedExecutionContext`. This fail-fast rule prevents concurrent calls
+from racing over OpenMP configuration or silently multiplying native teams.
+
+An embedding worker may therefore execute at most one Baysor segmentation at a
+time. Distributed orchestration may choose one process with a large OpenMP team,
+many processes with one OpenMP thread each, or a bounded hybrid. For CPU compute
+threads it should maintain:
+
+```text
+concurrent worker processes * OpenMP threads per worker <= allocated CPU cores
+```
+
+Arrow I/O concurrency and per-tile memory are budgeted separately. This model is
+compatible with a Dask nanny supervising one worker process: cancellation is
+cooperative within the process, while forced termination and guaranteed memory
+reclamation remain supervisor responsibilities.
 
 ## Return and failure contract
 
@@ -264,10 +296,17 @@ There are three mutually exclusive outcomes:
 - failure throws `SegmentationError` with a structured error code and message.
 
 Cancellation is not an exception and is never represented as a partially valid
-result. The operation observes cancellation before work and between major
-scientific phases. Cancellation is cooperative, so a request made while one
-native primitive is running takes effect when that primitive returns to a safe
-checkpoint.
+result. The operation observes cancellation before work, between major
+scientific phases, and at complete BMM iteration boundaries. It never interrupts
+an E-step/M-step transition halfway through. Cancellation is cooperative, so a
+request made while one indivisible native primitive is running takes effect when
+that primitive reaches its next checkpoint. Callers must not assume an
+instantaneous response or a fixed maximum cancellation latency. Complete BMM
+iterations are the current safe checkpoint granularity; coordinated checkpoints
+may be added inside long-running phases if measurements show that this latency
+is unacceptable, provided all participating native workers leave and join
+normally. Serializers accept only a completed `SegmentationResult`, so a
+cancelled operation cannot serialize a partial run.
 
 ### `SegmentationResult`
 
@@ -312,7 +351,7 @@ The nested result objects are:
   neighborhood-composition, and execution options; and
 - `NativeRunProvenance`: `baysor_version`, `build_revision`, master
   `random_seed`, random-substream contract version and derived streams, and
-  `effective_native_threads`.
+  requested/configured OpenMP, dynamic-team, and Arrow I/O settings.
 
 For completeness, the diagnostic and provenance structures expose these
 fields:
@@ -325,7 +364,7 @@ fields:
 | `NeighborhoodCompositionDiagnostics` | `sample_molecule_indices`, `sample_embedding_x`, `sample_embedding_y`, `chosen_confidence_threshold`, `anchor_count` |
 | `SegmentationDiagnostics` | `confidence_estimation`, `component_count_trace`, `molecule_clustering`, `neighborhood_composition` |
 | `RandomSubstreamProvenance` | `stream`, `seed` |
-| `NativeRunProvenance` | `baysor_version`, `build_revision`, `random_seed`, `random_substream_contract_version`, `random_substreams`, `effective_native_threads` |
+| `NativeRunProvenance` | `baysor_version`, `build_revision`, `random_seed`, `random_substream_contract_version`, `random_substreams`, `requested_native_threads`, `configured_openmp_max_threads`, `openmp_dynamic_enabled`, `arrow_threads_enabled` |
 
 No result field points into a temporary `BmmData` or CLI-owned object. Normal
 C++ ownership and move semantics apply.
@@ -345,6 +384,7 @@ the message and `code()` returns one of:
 | Error code | Category |
 | --- | --- |
 | `InvalidRequest` | Invalid or inconsistent typed input |
+| `UnsupportedExecutionContext` | Nested OpenMP entry or another active in-process segmentation call |
 | `MoleculeInput` | Molecule input loading or validation failure |
 | `PriorInput` | Prior input loading or validation failure |
 | `NativeProcessing` | Failure in native scientific processing |
@@ -353,6 +393,30 @@ the message and `code()` returns one of:
 The CLI maps structured errors to messages and exit codes. The nanobind
 adapter maps them to documented Python exceptions without reducing them to an
 integer process status.
+
+## CMake embedding
+
+The native library is position-independent and exported to build-tree consumers
+as `baysor::baysor`. A parent CMake project can consume an exact Baysor checkout
+without building the CLI:
+
+```cmake
+add_subdirectory(path/to/Baysor baysor EXCLUDE_FROM_ALL)
+target_link_libraries(my_extension PRIVATE baysor::baysor)
+```
+
+The target publishes the C++17 requirement, public include directory, and
+transitive link requirements needed by a static consumer. The standalone CLI is
+built by default only when Baysor is the top-level project; an embedding parent
+can opt in with `BAYSOR_BUILD_CLI=ON`. The clean consumer under
+`tests/cmake_consumer` is the executable link check for this contract.
+
+Returned results own their values and release them through normal C++ lifetime
+rules. Repeated calls retain no Baysor run object or random state. A native
+allocator may retain freed arenas, so stable resident memory is not evidence of
+a live-object leak; use a sanitizer or platform leak checker to detect linear
+growth in live allocations. A caller that requires hard memory reclamation must
+isolate the call in a supervised process.
 
 ## Paths, native objects, and Python artifacts
 
