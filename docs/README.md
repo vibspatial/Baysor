@@ -6,6 +6,7 @@ implementation.
 Current pages:
 
 - [Overview](index.md)
+- [How Baysor Segmentation Works](algorithm.md)
 - [Installation](installation.md)
 - [Running Baysor](run.md)
 - [Dataset Preview](preview.md)

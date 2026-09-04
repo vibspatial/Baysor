@@ -24,6 +24,7 @@ It is built with CMake and currently exposes three CLI subcommands:
 ## Start Here
 
 - [Installation](installation.md)
+- [How Baysor Segmentation Works](algorithm.md)
 - [Running Baysor](run.md)
 - [Dataset Preview](preview.md)
 - [Segmentation-Free NCVs](segfree.md)

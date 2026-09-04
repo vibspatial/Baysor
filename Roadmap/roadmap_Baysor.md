@@ -765,6 +765,69 @@ regeneration.
 Harden the extracted operation for repeated in-process use and hand it off as a
 clean CMake consumer target.
 
+#### Thread-resource and concurrency contract
+
+N3 must define the thread setting precisely before an embedding layer relies on
+it. `SegmentationExecutionOptions::native_threads` is a call-scoped
+request for Baysor's OpenMP team-size limit; it is not a process-wide limit on
+every thread that native dependencies may create. A value of zero inherits the
+already configured OpenMP runtime policy. A positive value applies only for the
+segmentation call, and the caller's prior OpenMP setting must be restored on
+success, cancellation, and exception paths.
+
+`omp_get_max_threads()` reports the configured maximum for a future OpenMP team,
+not the number of threads that a parallel region actually used. OpenMP dynamic
+team adjustment may use fewer threads. N3 must therefore make provenance
+unambiguous: retain the requested value, record the configured OpenMP maximum
+and dynamic-adjustment setting, and do not describe either as an observed thread
+count unless a parallel region is explicitly instrumented. The library should
+inherit `OMP_DYNAMIC` rather than silently changing that process policy.
+
+Arrow CSV and Parquet loading can use Arrow's own executor independently of
+OpenMP. N3 must inventory this path and either expose a separate, deliberately
+named I/O-thread policy or document and test the selected fixed behaviour. The
+OpenMP request and its provenance must not imply that Arrow threads are included
+in the same budget.
+
+Sequential repeated calls in one process are supported. Concurrent segmentation
+calls in one process remain unsupported unless N3 proves that their OpenMP
+configuration, random state, logging, and dependencies are isolated. This
+limitation must be explicit. The corresponding `baysor-python` execution model
+permits at most one active Baysor call per worker process: one tile uses the
+worker's allocated OpenMP budget, while multiple tiles run concurrently only in
+separate, appropriately budgeted worker processes. This avoids oversubscription
+from multiplying the worker count by the OpenMP team size without preventing
+later benchmark-driven parallelism.
+
+The execution contract deliberately supports three configurations:
+
+1. **OpenMP-focused:** one worker processes tiles sequentially and assigns many
+   OpenMP threads to the active tile;
+2. **tile-focused:** multiple worker processes segment different tiles
+   concurrently with one OpenMP thread per tile; and
+3. **hybrid:** multiple worker processes segment different tiles concurrently,
+   with a bounded multi-threaded OpenMP team in each worker.
+
+For CPU compute threads, the coordinator must maintain the budget
+
+```text
+concurrent Baysor worker processes * OpenMP threads per worker
+    <= allocated CPU cores
+```
+
+For example, a 16-core allocation may use `1 * 16`, `16 * 1`, `4 * 4`, or
+`8 * 2`, subject to available memory and measured performance. These are all
+supported configurations; benchmarks determine the appropriate default for a
+dataset and deployment. Concurrent tiles multiply the per-tile working-memory
+requirement, and Arrow I/O threads are accounted for separately from the formula
+above.
+
+Cancellation remains cooperative. Python, Dask, or another embedding caller may
+request cancellation from a control thread, but the native call returns only
+after it reaches a safe checkpoint; the token does not forcibly terminate an
+OpenMP team. Hard termination and complete allocator-memory reclamation remain
+worker-supervisor policies based on process isolation, outside this native API.
+
 Deliverables:
 
 - add cooperative cancellation checks after major phases and at safe BMM
@@ -776,6 +839,18 @@ Deliverables:
 - test repeated same-process calls for hidden global-state leakage;
 - test that repeated same-process calls with the same seed and one thread produce
   the same semantic result, without one call advancing another call's stream;
+- define `native_threads` as an OpenMP request rather than a total native-process
+  thread cap, and document the supported same-process concurrency model;
+- preserve an inherited OpenMP configuration when `native_threads` is zero and
+  restore the prior configuration after positive requests on successful,
+  cancelled, and exceptional exits;
+- replace or precisely document the misleading `effective_native_threads`
+  terminology: provenance must distinguish the requested value, configured
+  OpenMP maximum, and dynamic-team setting from any actually observed team size;
+- inventory Arrow CSV and Parquet reader threading and make its relationship to
+  the OpenMP budget explicit, without implying that one setting controls both;
+- add focused tests for zero/inherited configuration, positive thread requests,
+  restoration across every exit path, and thread provenance;
 - verify that no call replaces a process-wide logger, calls `std::exit`, or
   relies on CLI-owned mutable state;
 - make `baysor_lib` consumable through `add_subdirectory(...)`, including
@@ -789,8 +864,10 @@ plateau from linear growth in live allocations. Hard process reclamation remains
 a supervisor policy outside this repository.
 
 Exit criterion: direct native tests cover success, invalid input, cancellation,
-owned-result lifetime, and repeated calls; a clean CMake consumer can link the
-library without modifying the Baysor checkout.
+owned-result lifetime, repeated calls, and OpenMP setting/restoration semantics;
+thread provenance cannot be mistaken for an observed team size; Arrow I/O
+threading and the supported same-process concurrency model are documented; and a
+clean CMake consumer can link the library without modifying the Baysor checkout.
 
 Handoff: select and review the green N3 commit. `baysor-python` pins that exact
 commit as its Slice 1A.2 source dependency and records both the upstream baseline

@@ -42,6 +42,7 @@ Example datasets and runnable commands:
 User-facing documentation for this branch:
 
 - [docs/README.md](docs/README.md)
+- [How Baysor segmentation works](docs/algorithm.md)
 
 Native integration documentation:
 
