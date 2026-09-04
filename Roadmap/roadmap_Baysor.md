@@ -732,33 +732,69 @@ but which are not exercised by the original N0 fixture. It is a focused
 equivalence gate, not an expansion of the segmentation algorithm or a general
 benchmark suite.
 
+N2b must protect against two different failure modes:
+
+1. the new direct operation may orchestrate unchanged scientific components
+   differently from the legacy CLI; and
+2. the seed-plumbing changes inside shared scientific components may alter both
+   the current CLI and the direct operation in the same way.
+
+A comparison between only the current CLI and the direct operation detects the
+first failure mode but cannot exclude the second, because both link the same
+modified `baysor_lib`. The scientific oracle for every end-to-end N2b case is
+therefore a recorded result from the pre-extraction behavioural baseline,
+commit `f46a1e1dce1606d0ea644f4f8f1cf682597ba65c`:
+
+```text
+                 recorded pre-N2 result
+                    from f46a1e1...
+                       /         \
+                      v           v
+          current legacy CLI     direct native operation
+```
+
+Generate each reference twice from fresh single-threaded processes with
+`OMP_NUM_THREADS=1`, `OMP_DYNAMIC=FALSE`, and the pre-extraction CLI's implicit
+seed `1`. Retain the small input, locked configuration, parsed scientific
+outputs, baseline revision, and generation recipe. Routine CI consumes these
+versioned references; it does not rebuild the historical checkout. Both the
+current legacy CLI and `run_segmentation(...)` must independently match the same
+reference. Comparing the two current paths remains a useful diagnostic, but it
+is not the historical oracle.
+
 Add the following small parity matrix:
 
 1. a 2D fixture containing duplicate coordinates, exercising the jittered graph
-   path through both the unchanged CLI and direct native operation;
+   path through the pre-N2 reference, current legacy CLI, and direct native
+   operation;
 2. a fixture exercising MRF molecule clustering and neighborhood-composition
-   colours through both entry paths;
-3. small Louvain and Leiden direct-call tests covering their seeded NCV basis
-   and clustering dispatch;
-4. a small 3D CLI-versus-direct fixture; and
+   colours through all three paths;
+3. small parameterized Louvain and Leiden cases covering their seeded NCV basis,
+   clustering dispatch, molecule-cluster assignments, and downstream
+   segmentation through all three paths;
+4. a small 3D case exercising dimensional dispatch, segmentation, joined
+   boundaries, and per-Z boundary stacks through all three paths; and
 5. a focused unit test proving that a legacy default call and the equivalent
    explicitly supplied legacy seed produce identical random sequences and
    scientific results.
 
-CLI-versus-direct comparisons remain semantic: molecule identity, noise/cell
-partition, confidence, clustering where applicable, statistics, boundaries,
-counts, and resolved settings are compared without requiring byte-identical
-serialization or identical arbitrary cell-label numbering. Use seed `1` and one
-native thread for the compatibility comparisons. Tests of other seeds should
-assert repeatability and invariants rather than equality to a historical CLI
-result that had no configurable master seed.
+Reference comparisons remain semantic: molecule identity, noise/cell partition,
+confidence, clustering and NCV-derived fields where applicable, statistics,
+boundaries, counts, and resolved settings are compared without requiring
+byte-identical serialization or identical arbitrary cell-label numbering. The
+existing N0 comparators should be reused or minimally generalized; N2b does not
+create a general-purpose comparison framework. Use seed `1` and one native
+thread for the compatibility comparisons. Tests of other seeds should assert
+repeatability and invariants rather than equality to a historical CLI result
+that had no configurable master seed.
 
-Exit criterion: all five cases pass, the existing N0 regression remains green,
-and review finds no unexplained scientific difference between the compatibility
-CLI and direct operation in the covered 2D, 3D, duplicate-coordinate,
-clustering, and NCV paths. Any difference must be explained and accepted before
-N2 is merged; it must not be hidden by broad numerical tolerances or fixture
-regeneration.
+Exit criterion: every new pre-N2 reference is reproducible under its locked
+settings, both the current legacy CLI and direct operation match it semantically,
+the supporting legacy-seed test passes, and the existing N0 regression remains
+green. Review finds no unexplained scientific difference in the covered 2D, 3D,
+duplicate-coordinate, MRF, Louvain, Leiden, or NCV paths. Any difference must be
+explained and accepted before N2 is merged; it must not be hidden by broad
+numerical tolerances or fixture regeneration.
 
 ### Native Slice N3: Complete cancellation, lifecycle, and embeddability
 
