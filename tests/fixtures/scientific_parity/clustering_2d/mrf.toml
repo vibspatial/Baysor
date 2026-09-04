@@ -1,0 +1,32 @@
+[molecules]
+x = "x"
+y = "y"
+gene = "gene"
+min_molecules_per_gene = 1
+min_molecules_per_cell = 6
+confidence_nn_id = 5
+
+[prior]
+type = "column"
+column_name = "prior_cell"
+unassigned_label = "0"
+min_molecules_per_segment = 2
+estimate_scale_from_prior = false
+
+[segmentation]
+scale = 2.0
+scale_std = "25%"
+cluster_method = "mrf"
+n_clusters = 3
+cluster_resolution = 1.0
+cluster_graph_k = 5
+cluster_n_dims = 3
+cluster_basis_sample_size = 54
+prior_segmentation_confidence = 0.8
+iters = 40
+tol = 0.0
+n_cells_init = 0
+
+[plotting]
+gene_composition_neighborhood = 6
+ncv_method = "ri"

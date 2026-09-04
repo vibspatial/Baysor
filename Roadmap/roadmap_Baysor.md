@@ -273,10 +273,14 @@ materialization. Random state is run-local and derived from the N1 substream
 contract, result-based serializers cover the locked legacy products, and the
 direct operation plus unchanged CLI both pass the N0 semantic fixture.
 
-The next implementation slice is Native Slice N2b: exercise the stochastic
-branches touched by extraction through a small scientific parity matrix while
-the N2 changes are reviewed. N3 then completes cancellation-depth, repeated-call
-lifecycle, and embedding-consumer hardening.
+Native Slice N2b is complete in the current working tree as of 2026-09-04. Its
+versioned pre-N2 references and generation recipe live under
+`tests/fixtures/scientific_parity`. The current CLI and direct operation both
+match the duplicate-coordinate, MRF, Louvain, Leiden, and 3D references; focused
+tests also cover legacy-seed equivalence and the NCV-colour product boundary.
+
+The next implementation slice is N3, which completes cancellation-depth,
+repeated-call lifecycle, and embedding-consumer hardening.
 
 The deferred actual-UCB experiment remains outside this sequence.
 
@@ -725,7 +729,15 @@ gates remain explicitly assigned to N3 and N4.
 
 ### Native Slice N2b: Harden extraction with a scientific parity matrix
 
-Implementation status: planned as the N2 review follow-up.
+Implementation status: complete in the current working tree as of 2026-09-04.
+
+The implemented fixture set and historical generation recipe are stored in
+`tests/fixtures/scientific_parity`. The reference scientific artifacts were
+generated twice from the pre-extraction commit and were byte-identical between
+runs; only the machine-specific invocation comment in the resolved-parameter
+dump was removed. CTest discovers separate current-CLI and direct-operation
+cases for every matrix entry, so a failure identifies both the scientific branch
+and the frontend that diverged.
 
 N2b tests the algorithm branches whose random-state plumbing changed during N2
 but which are not exercised by the original N0 fixture. It is a focused

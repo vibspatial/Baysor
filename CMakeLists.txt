@@ -325,6 +325,7 @@ if(BAYSOR_WITH_TESTS)
     target_compile_definitions(baysor_tests PRIVATE
         BAYSOR_TEST_CLI_PATH="$<TARGET_FILE:baysor>"
         BAYSOR_TEST_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/native_baseline"
+        BAYSOR_TEST_SCIENTIFIC_PARITY_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/scientific_parity"
         BAYSOR_TEST_CMAKE_COMMAND="${CMAKE_COMMAND}"
     )
     if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
