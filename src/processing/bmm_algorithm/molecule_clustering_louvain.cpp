@@ -867,14 +867,16 @@ static ClusteringResult cluster_molecules_graph_backend(
     int target_clusters,
     int n_dims,
     int basis_sample_size,
-    bool verbose
+    bool verbose,
+    unsigned int random_seed
 ) {
     if (pos_data.cols() == 0) return {};
 
     const int n_genes = *std::max_element(genes.begin(), genes.end());
     const int effective_spatial_k = spatial_k > 0 ? spatial_k : std::max(3, n_genes / 10);
     auto ncv_model = std::make_shared<NcvProjectedModel>(fit_ncv_projected_model(
-        pos_data, genes, n_genes, confidence, effective_spatial_k, basis_sample_size, n_dims, true
+        pos_data, genes, n_genes, confidence, effective_spatial_k, basis_sample_size, n_dims,
+        true, random_seed
     ));
     const std::vector<int>& cluster_anchor_ids = ncv_model->basis.basis_ids;
     std::vector<double> cluster_anchor_confidence;
@@ -938,11 +940,13 @@ ClusteringResult cluster_molecules_louvain(
     int target_clusters,
     int n_dims,
     int basis_sample_size,
-    bool verbose
+    bool verbose,
+    unsigned int random_seed
 ) {
     return cluster_molecules_graph_backend(
         ClusterMethod::Louvain, pos_data, genes, confidence,
-        resolution, graph_k, spatial_k, target_clusters, n_dims, basis_sample_size, verbose
+        resolution, graph_k, spatial_k, target_clusters, n_dims, basis_sample_size, verbose,
+        random_seed
     );
 }
 
@@ -957,11 +961,13 @@ ClusteringResult cluster_molecules_leiden(
     int target_clusters,
     int n_dims,
     int basis_sample_size,
-    bool verbose
+    bool verbose,
+    unsigned int random_seed
 ) {
     return cluster_molecules_graph_backend(
         ClusterMethod::Leiden, pos_data, genes, confidence,
-        resolution, graph_k, spatial_k, target_clusters, n_dims, basis_sample_size, verbose
+        resolution, graph_k, spatial_k, target_clusters, n_dims, basis_sample_size, verbose,
+        random_seed
     );
 }
 
@@ -981,19 +987,19 @@ ClusteringResult cluster_molecules(
             return cluster_molecules_ica(
                 genes, adj_list, confidence,
                 options.n_clusters, options.tol, options.mrf_weight,
-                options.max_iters, verbose
+                options.max_iters, verbose, options.random_seed
             );
         case ClusterMethod::Louvain:
             return cluster_molecules_louvain(
                 pos_data, genes, adj_list, confidence,
                 options.resolution, options.graph_k, options.spatial_k, options.n_clusters,
-                options.n_dims, options.basis_sample_size, verbose
+                options.n_dims, options.basis_sample_size, verbose, options.random_seed
             );
         case ClusterMethod::Leiden:
             return cluster_molecules_leiden(
                 pos_data, genes, adj_list, confidence,
                 options.resolution, options.graph_k, options.spatial_k, options.n_clusters,
-                options.n_dims, options.basis_sample_size, verbose
+                options.n_dims, options.basis_sample_size, verbose, options.random_seed
             );
     }
     return {};

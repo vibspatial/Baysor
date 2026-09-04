@@ -412,7 +412,8 @@ ClusteringResult cluster_molecules_ica(
     double tol,
     double mrf_weight,
     int max_iters,
-    bool verbose
+    bool verbose,
+    unsigned int random_seed
 ) {
     if (n_clusters <= 1) return {};
 
@@ -427,7 +428,8 @@ ClusteringResult cluster_molecules_ica(
     // 2. FastICA on the correlation matrix → unmixing matrix (n_genes × n_clusters)
     std::unique_ptr<Eigen::MatrixXd> exprs_init_ptr;
     try {
-        Eigen::MatrixXd W = fast_ica(cor_mat, n_clusters);
+        Eigen::MatrixXd W = fast_ica(
+            cor_mat, n_clusters, /*max_iter=*/1000, /*tol=*/1e-5, random_seed);
         // Convert mixing matrix to expression profiles:
         //   ct_exprs_init[k][g] = abs(W[g][k]) / sum_g'(abs(W[g'][k]))
         // Matches Julia: (abs.(ica_fit.W) ./ sum(abs.(ica_fit.W), dims=1))'

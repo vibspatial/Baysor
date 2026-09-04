@@ -157,7 +157,12 @@ static void adjust_densities_by_prior_segmentation(
 // ============================================================================
 
 template<int N>
-EstepStats expect_dirichlet_spatial(BmmData<N>& data, bool stochastic) {
+EstepStats expect_dirichlet_spatial(
+    BmmData<N>& data,
+    bool stochastic,
+    Xoshiro256pp* single_thread_random_state,
+    std::uint64_t parallel_random_seed
+) {
     int n = data.n_molecules();
     bool has_segments = !data.segment_per_molecule.empty();
     bool has_clusters  = !data.cluster_per_molecule.empty();
@@ -186,7 +191,8 @@ EstepStats expect_dirichlet_spatial(BmmData<N>& data, bool stochastic) {
     if (n_threads > 1) {
         rngs.resize(n_threads);
         for (int t = 0; t < n_threads; ++t) {
-            rngs[t].seed(static_cast<uint32_t>(1) ^ static_cast<uint32_t>(t * 2654435761u));
+            rngs[t].seed(
+                parallel_random_seed ^ static_cast<std::uint64_t>(t * 2654435761u));
         }
     }
 
@@ -318,8 +324,11 @@ EstepStats expect_dirichlet_spatial(BmmData<N>& data, bool stochastic) {
             new_assignment[mol_id] = adj_classes[best];
         } else {
             if (n_threads == 1) {
+                auto& rng = single_thread_random_state != nullptr
+                    ? *single_thread_random_state
+                    : global_xoshiro_rng();
                 new_assignment[mol_id] =
-                    fsample(adj_classes.data(), denses.data(), n_total, global_xoshiro_rng());
+                    fsample(adj_classes.data(), denses.data(), n_total, rng);
             } else {
                 new_assignment[mol_id] = fsample(adj_classes.data(), denses.data(), n_total, rngs[ti]);
             }
@@ -525,7 +534,9 @@ void bmm(BmmData<N>& data,
          int assignment_history_depth, bool verbose,
          int component_split_step, bool refine,
          bool freeze_composition, bool freeze_position, bool freeze_components,
-         double tol, int min_molecules_display)
+         double tol, int min_molecules_display,
+         Xoshiro256pp* single_thread_random_state,
+         std::uint64_t parallel_random_seed)
 {
     // Display threshold: matches Julia's min_molecules_per_cell for the progress bar.
     // Drop threshold: matches Julia's hardcoded min_n_samples=2 in drop_unused_components!
@@ -576,7 +587,8 @@ void bmm(BmmData<N>& data,
         data.update_n_mols_per_segment();
 
         // E-step — track assignment changes for convergence
-        EstepStats estep_stats = expect_dirichlet_spatial(data, /*stochastic=*/true);
+        EstepStats estep_stats = expect_dirichlet_spatial(
+            data, /*stochastic=*/true, single_thread_random_state, parallel_random_seed);
 
         // Compute fraction of changed assignments
         if (tol > 0.0) {
@@ -645,10 +657,10 @@ void bmm(BmmData<N>& data,
 }
 
 // Explicit instantiations
-template void bmm<2>(BmmData<2>&, int, int, int, bool, int, bool, bool, bool, bool, double, int);
-template void bmm<3>(BmmData<3>&, int, int, int, bool, int, bool, bool, bool, bool, double, int);
-template EstepStats expect_dirichlet_spatial<2>(BmmData<2>&, bool);
-template EstepStats expect_dirichlet_spatial<3>(BmmData<3>&, bool);
+template void bmm<2>(BmmData<2>&, int, int, int, bool, int, bool, bool, bool, bool, double, int, Xoshiro256pp*, std::uint64_t);
+template void bmm<3>(BmmData<3>&, int, int, int, bool, int, bool, bool, bool, bool, double, int, Xoshiro256pp*, std::uint64_t);
+template EstepStats expect_dirichlet_spatial<2>(BmmData<2>&, bool, Xoshiro256pp*, std::uint64_t);
+template EstepStats expect_dirichlet_spatial<3>(BmmData<3>&, bool, Xoshiro256pp*, std::uint64_t);
 template void maximize<2>(BmmData<2>&, bool, bool);
 template void maximize<3>(BmmData<3>&, bool, bool);
 template void drop_unused_components<2>(BmmData<2>&, int);
