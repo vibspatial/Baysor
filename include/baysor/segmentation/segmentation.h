@@ -61,13 +61,18 @@ struct NeighborhoodCompositionOptions {
     std::string method = "ri";
 };
 
-/// Requested native execution resources. A positive value requests that many
-/// threads, zero leaves selection to the already configured native runtime, and
-/// a negative value is invalid. Callers requiring deterministic semantic replay
-/// must request exactly one thread; parallel execution is not guaranteed to be
-/// deterministic, even with an unchanged seed and thread count.
+/// Requested native execution resources.
+///
+/// native_threads controls only Baysor's OpenMP team-size request. A positive
+/// value requests that many threads and zero inherits the caller's configured
+/// OpenMP maximum. use_arrow_threads independently controls parallel CSV and
+/// Parquet decoding; it does not size Arrow's process-global CPU pool. Callers
+/// requiring deterministic semantic replay must request exactly one OpenMP
+/// thread; parallel execution is not guaranteed to be deterministic, even with
+/// an unchanged seed and thread count.
 struct SegmentationExecutionOptions {
     int native_threads = 0;
+    bool use_arrow_threads = true;
 };
 
 /// Products requested from one segmentation run.
@@ -195,7 +200,10 @@ struct NativeRunProvenance {
     std::uint64_t random_seed = kDefaultSegmentationSeed;
     std::uint32_t random_substream_contract_version = kRandomSubstreamContractVersion;
     std::vector<RandomSubstreamProvenance> random_substreams;
-    int effective_native_threads = 0;
+    int requested_native_threads = 0;
+    int configured_openmp_max_threads = 0;
+    bool openmp_dynamic_enabled = false;
+    bool arrow_threads_enabled = true;
 };
 
 /// Fully owned scientific result.
@@ -228,6 +236,7 @@ using SegmentationOutcome = std::variant<SegmentationResult, SegmentationCancell
 
 enum class SegmentationErrorCode {
     InvalidRequest,
+    UnsupportedExecutionContext,
     MoleculeInput,
     PriorInput,
     NativeProcessing,
@@ -252,6 +261,9 @@ private:
 /// options, runs the scientific workflow, and returns owned result values. It
 /// does not choose filenames or write output artifacts. Failures throw
 /// SegmentationError; cooperative cancellation returns SegmentationCancelled.
+/// Calls must originate outside an active OpenMP parallel region. Sequential
+/// calls in one process are supported; overlapping calls in one process are
+/// rejected with UnsupportedExecutionContext.
 [[nodiscard]] SegmentationOutcome run_segmentation(
     const SegmentationRequest& request,
     const CancellationToken& cancellation

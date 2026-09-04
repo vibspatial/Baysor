@@ -57,9 +57,13 @@ T arrow_unwrap(arrow::Result<T>&& result) {
 }
 
 /// Read a CSV file into an Arrow Table
-std::shared_ptr<arrow::Table> read_csv_arrow(const std::string& path) {
+std::shared_ptr<arrow::Table> read_csv_arrow(
+    const std::string& path,
+    bool use_arrow_threads
+) {
     auto input = arrow_unwrap(arrow::io::ReadableFile::Open(path));
     auto read_options = arrow::csv::ReadOptions::Defaults();
+    read_options.use_threads = use_arrow_threads;
     auto parse_options = arrow::csv::ParseOptions::Defaults();
     auto convert_options = arrow::csv::ConvertOptions::Defaults();
     // Let Arrow auto-detect types
@@ -70,23 +74,27 @@ std::shared_ptr<arrow::Table> read_csv_arrow(const std::string& path) {
 }
 
 /// Read a Parquet file into an Arrow Table
-std::shared_ptr<arrow::Table> read_parquet_arrow(const std::string& path) {
+std::shared_ptr<arrow::Table> read_parquet_arrow(
+    const std::string& path,
+    bool use_arrow_threads
+) {
     auto input = arrow_unwrap(arrow::io::ReadableFile::Open(path));
     parquet::arrow::FileReaderBuilder builder;
     ARROW_CHECK_OK(builder.Open(input));
     auto reader = arrow_unwrap(builder.Build());
+    reader->set_use_threads(use_arrow_threads);
     std::shared_ptr<arrow::Table> table;
     ARROW_CHECK_OK(reader->ReadTable(&table));
     return table;
 }
 
 /// Read a tabular file (detect format by extension)
-std::shared_ptr<arrow::Table> read_table(const std::string& path) {
+std::shared_ptr<arrow::Table> read_table(const std::string& path, bool use_arrow_threads) {
     std::string ext = file_extension(path);
     if (ext == "csv" || ext == "tsv") {
-        return read_csv_arrow(path);
+        return read_csv_arrow(path, use_arrow_threads);
     } else if (ext == "parquet" || ext == "pq") {
-        return read_parquet_arrow(path);
+        return read_parquet_arrow(path, use_arrow_threads);
     } else {
         throw std::runtime_error("Unsupported file format: ." + ext +
                                  ". Provide a CSV or Parquet file.");
@@ -253,12 +261,15 @@ bool has_column(const std::shared_ptr<arrow::Schema>& schema, const std::string&
     return schema->GetFieldIndex(name) >= 0;
 }
 
-std::shared_ptr<parquet::arrow::FileReader> open_parquet_reader(const std::string& path) {
+std::shared_ptr<parquet::arrow::FileReader> open_parquet_reader(
+    const std::string& path,
+    bool use_arrow_threads
+) {
     auto input = arrow_unwrap(arrow::io::ReadableFile::Open(path));
     parquet::arrow::FileReaderBuilder builder;
     ARROW_CHECK_OK(builder.Open(input));
     auto reader = arrow_unwrap(builder.Build());
-    reader->set_use_threads(true);
+    reader->set_use_threads(use_arrow_threads);
     reader->set_batch_size(65536);
     return reader;
 }
@@ -657,9 +668,10 @@ std::vector<int> all_row_groups(const std::shared_ptr<parquet::arrow::FileReader
 
 Pass1Summary scan_parquet_pass1(
     const std::string& path,
-    const MoleculeInputOptions& opts
+    const MoleculeInputOptions& opts,
+    bool use_arrow_threads
 ) {
-    auto reader = open_parquet_reader(path);
+    auto reader = open_parquet_reader(path, use_arrow_threads);
     auto schema = get_parquet_schema(reader);
     auto plan = make_parquet_scan_plan(schema, opts, "");
 
@@ -963,13 +975,21 @@ void filter_genes_by_pattern(MoleculeData& data, const std::vector<std::string>&
 // Read a single string column (for prior segmentation column references)
 // ============================================================================
 
-std::vector<std::string> read_string_column(const std::string& path, const std::string& col_name) {
-    auto table = read_table(path);
+std::vector<std::string> read_string_column(
+    const std::string& path,
+    const std::string& col_name,
+    bool use_arrow_threads
+) {
+    auto table = read_table(path, use_arrow_threads);
     return extract_string_column(table, col_name);
 }
 
-std::vector<double> read_double_column(const std::string& path, const std::string& col_name) {
-    auto table = read_table(path);
+std::vector<double> read_double_column(
+    const std::string& path,
+    const std::string& col_name,
+    bool use_arrow_threads
+) {
+    auto table = read_table(path, use_arrow_threads);
     return extract_double_column(table, col_name);
 }
 
@@ -977,8 +997,12 @@ std::vector<double> read_double_column(const std::string& path, const std::strin
 // Main loading function
 // ============================================================================
 
-RawTableData read_tabular_file(const std::string& path, const MoleculeInputOptions& opts) {
-    auto table = read_table(path);
+RawTableData read_tabular_file(
+    const std::string& path,
+    const MoleculeInputOptions& opts,
+    bool use_arrow_threads
+) {
+    auto table = read_table(path, use_arrow_threads);
     RawTableData raw;
 
     // Extract x, y (required)
@@ -1016,7 +1040,8 @@ RawTableData read_tabular_file(const std::string& path, const MoleculeInputOptio
 MoleculeData load_molecules(
     const std::string& path,
     const MoleculeInputOptions& opts,
-    const PriorInputOptions& prior_opts
+    const PriorInputOptions& prior_opts,
+    bool use_arrow_threads
 ) {
     MoleculeData data;
     const bool load_prior_column = prior_opts.type == PriorInputType::Column && !prior_opts.column_name.empty();
@@ -1024,10 +1049,10 @@ MoleculeData load_molecules(
 
     std::string ext = file_extension(path);
     if (ext == "parquet" || ext == "pq") {
-        auto pass1 = scan_parquet_pass1(path, opts);
+        auto pass1 = scan_parquet_pass1(path, opts, use_arrow_threads);
         data.gene_names = pass1.gene_names;
 
-        auto reader = open_parquet_reader(path);
+        auto reader = open_parquet_reader(path, use_arrow_threads);
         auto schema = get_parquet_schema(reader);
         auto plan = make_parquet_scan_plan(schema, opts, load_prior_column ? prior_column_name : "");
 
@@ -1173,7 +1198,7 @@ MoleculeData load_molecules(
     }
 
     // Read the full table once (shared with optional column extraction below)
-    auto table = read_table(path);
+    auto table = read_table(path, use_arrow_threads);
 
     // Extract required spatial columns
     data.x = extract_double_column(table, opts.x_col);

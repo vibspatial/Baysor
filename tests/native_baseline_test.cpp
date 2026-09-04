@@ -638,7 +638,9 @@ TEST(SegmentationOperation, DirectCallMatchesNativeBaseline) {
     EXPECT_EQ(result.provenance.random_substream_contract_version,
               baysor::kRandomSubstreamContractVersion);
     EXPECT_EQ(result.provenance.random_substreams.size(), 4U);
-    EXPECT_EQ(result.provenance.effective_native_threads, 1);
+    EXPECT_EQ(result.provenance.requested_native_threads, 1);
+    EXPECT_EQ(result.provenance.configured_openmp_max_threads, 1);
+    EXPECT_TRUE(result.provenance.arrow_threads_enabled);
     EXPECT_EQ(result.provenance.baysor_version, "0.8.3");
 
     TemporaryDirectory output;

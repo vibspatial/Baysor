@@ -1,6 +1,7 @@
 #pragma once
 
 #include "baysor/processing/models/bmm_data.h"
+#include "baysor/segmentation/cancellation.h"
 #include "baysor/utils/xoshiro.h"
 #include <cstdint>
 
@@ -10,6 +11,14 @@ struct EstepStats {
     std::int64_t n_changed = 0;
 };
 
+/// Completion state for the cooperatively cancellable BMM loop. Cancellation
+/// is observed only at boundaries where an iteration's E-step, component
+/// maintenance, M-step, and tracing have all completed.
+enum class BmmRunStatus {
+    Completed,
+    Cancelled
+};
+
 /// Run the main BMM segmentation algorithm (EM loop).
 /// This is the core of Baysor: iterates E-step (molecule assignment) and
 /// M-step (component parameter estimation) for n_iters iterations.
@@ -17,8 +26,9 @@ struct EstepStats {
 /// min_molecules_drop:    per-iteration drop threshold (Julia: min_n_samples=2 default)
 /// min_molecules_display: threshold used in verbose progress display (Julia: min_molecules_per_cell)
 ///                        Set to 0 to match min_molecules_drop.
+/// cancellation:          optional cooperative token observed only at safe iteration boundaries.
 template<int N>
-void bmm(BmmData<N>& data,
+BmmRunStatus bmm(BmmData<N>& data,
          int min_molecules_drop = 2,
          int n_iters = 500,
          int assignment_history_depth = 0,
@@ -31,7 +41,8 @@ void bmm(BmmData<N>& data,
          double tol = 0.0,
          int min_molecules_display = 0,
          Xoshiro256pp* single_thread_random_state = nullptr,
-         std::uint64_t parallel_random_seed = 1);  ///< display threshold (0 = same as min_molecules_drop)
+         std::uint64_t parallel_random_seed = 1,
+         const CancellationToken* cancellation = nullptr);
 
 /// E-step: reassign molecules to components based on spatial + expression density
 template<int N>

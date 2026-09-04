@@ -104,17 +104,21 @@ bool point_in_polygon(const BoundaryPolygon& poly, double x, double y) {
     return inside;
 }
 
-std::vector<BoundaryPolygon> load_boundary_polygons(const std::string& path) {
-    std::vector<double> vx = read_double_column(path, "vertex_x");
-    std::vector<double> vy = read_double_column(path, "vertex_y");
+std::vector<BoundaryPolygon> load_boundary_polygons(
+    const std::string& path,
+    bool use_arrow_threads
+) {
+    std::vector<double> vx = read_double_column(path, "vertex_x", use_arrow_threads);
+    std::vector<double> vy = read_double_column(path, "vertex_y", use_arrow_threads);
     std::vector<int> labels;
 
     try {
-        auto label_d = read_double_column(path, "label_id");
+        auto label_d = read_double_column(path, "label_id", use_arrow_threads);
         labels.resize(label_d.size());
         for (size_t i = 0; i < label_d.size(); ++i) labels[i] = static_cast<int>(std::llround(label_d[i]));
     } catch (...) {
-        labels = encode_prior_labels(read_string_column(path, "cell_id"), "");
+        labels = encode_prior_labels(
+            read_string_column(path, "cell_id", use_arrow_threads), "");
     }
 
     if (vx.size() != vy.size() || vx.size() != labels.size()) {
@@ -928,7 +932,8 @@ ImageSegResult load_prior_from_image(
 std::pair<double, double> load_prior_segmentation(
     MoleculeData& data,
     const PriorInputOptions& prior_opts,
-    int min_molecules_per_cell
+    int min_molecules_per_cell,
+    bool use_arrow_threads
 ) {
     auto seg_type = prior_opts.type;
 
@@ -955,7 +960,7 @@ std::pair<double, double> load_prior_segmentation(
                          scale, scale_std);
         }
     } else if (seg_type == PriorInputType::Boundary) {
-        auto polygons = load_boundary_polygons(prior_opts.path);
+        auto polygons = load_boundary_polygons(prior_opts.path, use_arrow_threads);
         filter_boundary_polygons_to_molecule_bounds(
             polygons, compute_molecule_bounds(data.x, data.y));
         data.prior_segmentation = assign_molecules_to_boundaries(

@@ -15,6 +15,7 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <mutex>
 #include <unordered_map>
 #include <utility>
 
@@ -44,30 +45,62 @@ int narrow_signed_seed(std::uint64_t seed) noexcept {
     return static_cast<int>(narrow_seed(seed) & 0x7fffffffU);
 }
 
-class ScopedNativeThreads {
+std::mutex& native_run_mutex() {
+    static std::mutex mutex;
+    return mutex;
+}
+
+class ScopedNativeExecution {
 public:
-    explicit ScopedNativeThreads(int requested_threads)
-        : previous_max_threads_(omp_get_max_threads()) {
+    explicit ScopedNativeExecution(int requested_threads)
+        : run_lock_(native_run_mutex(), std::defer_lock) {
+        if (omp_in_parallel() != 0 || omp_get_active_level() > 0) {
+            throw SegmentationError(
+                SegmentationErrorCode::UnsupportedExecutionContext,
+                "run_segmentation must be called outside an active OpenMP parallel region.");
+        }
+        if (!run_lock_.try_lock()) {
+            throw SegmentationError(
+                SegmentationErrorCode::UnsupportedExecutionContext,
+                "Concurrent in-process run_segmentation calls are unsupported; "
+                "run at most one Baysor segmentation per process.");
+        }
+
+        previous_max_threads_ = omp_get_max_threads();
+        previous_dynamic_ = omp_get_dynamic();
         if (requested_threads > 0) {
             omp_set_num_threads(requested_threads);
         }
-        effective_threads_ = omp_get_max_threads();
+        configured_max_threads_ = omp_get_max_threads();
+        dynamic_enabled_ = omp_get_dynamic() != 0;
+        runtime_state_captured_ = true;
     }
 
-    ~ScopedNativeThreads() {
-        omp_set_num_threads(previous_max_threads_);
+    ~ScopedNativeExecution() {
+        if (runtime_state_captured_) {
+            omp_set_num_threads(previous_max_threads_);
+            omp_set_dynamic(previous_dynamic_);
+        }
     }
 
-    ScopedNativeThreads(const ScopedNativeThreads&) = delete;
-    ScopedNativeThreads& operator=(const ScopedNativeThreads&) = delete;
+    ScopedNativeExecution(const ScopedNativeExecution&) = delete;
+    ScopedNativeExecution& operator=(const ScopedNativeExecution&) = delete;
 
-    [[nodiscard]] int effective_threads() const noexcept {
-        return effective_threads_;
+    [[nodiscard]] int configured_max_threads() const noexcept {
+        return configured_max_threads_;
+    }
+
+    [[nodiscard]] bool dynamic_enabled() const noexcept {
+        return dynamic_enabled_;
     }
 
 private:
+    std::unique_lock<std::mutex> run_lock_;
     int previous_max_threads_ = 1;
-    int effective_threads_ = 1;
+    int previous_dynamic_ = 0;
+    int configured_max_threads_ = 1;
+    bool dynamic_enabled_ = false;
+    bool runtime_state_captured_ = false;
 };
 
 [[nodiscard]] bool cancellation_requested(const CancellationToken& cancellation) noexcept {
@@ -358,7 +391,7 @@ SegmentationOutcome finish_segmentation(
     if (cancellation_requested(cancellation)) return SegmentationCancelled{};
 
     const int history_depth = std::max(1, options.segmentation.iters / 10);
-    bmm(
+    const auto bmm_status = bmm(
         bm_data,
         /*min_molecules_drop=*/2,
         options.segmentation.iters,
@@ -372,9 +405,12 @@ SegmentationOutcome finish_segmentation(
         options.segmentation.tol,
         options.molecules.min_molecules_per_cell,
         &core_random_state,
-        core_seed);
+        core_seed,
+        &cancellation);
 
-    if (cancellation_requested(cancellation)) return SegmentationCancelled{};
+    if (bmm_status == BmmRunStatus::Cancelled || cancellation_requested(cancellation)) {
+        return SegmentationCancelled{};
+    }
 
     SegmentationResult result;
     result.cell_ids = make_cell_ids(bm_data.n_components());
@@ -396,6 +432,7 @@ SegmentationOutcome finish_segmentation(
             /*n_components=*/20,
             /*include_full_projection=*/true,
             narrow_seed(neighborhood_seed));
+        if (cancellation_requested(cancellation)) return SegmentationCancelled{};
         result.neighborhood_composition_colors =
             gene_composition_color_embedding_streaming(
                 positions,
@@ -409,6 +446,7 @@ SegmentationOutcome finish_segmentation(
                 /*n_pca_dims=*/10,
                 options.segmentation.cluster_graph_k,
                 &ncv_model);
+        if (cancellation_requested(cancellation)) return SegmentationCancelled{};
         if (requested_products.diagnostics) {
             ncv_report = gene_composition_report_embedding_streaming(
                 positions,
@@ -422,11 +460,13 @@ SegmentationOutcome finish_segmentation(
                 /*n_pca_dims=*/10,
                 options.segmentation.cluster_graph_k,
                 &ncv_model);
+            if (cancellation_requested(cancellation)) return SegmentationCancelled{};
         }
     }
 
     if (requested_products.cell_statistics) {
         result.cell_statistics = build_cell_statistics(data, bm_data, result.cell_ids);
+        if (cancellation_requested(cancellation)) return SegmentationCancelled{};
     }
     if (requested_products.boundaries) {
         auto boundaries = boundary_polygons_auto(
@@ -438,9 +478,11 @@ SegmentationOutcome finish_segmentation(
             &core_random_state);
         result.boundaries_2d = std::move(boundaries.first);
         if constexpr (N == 3) result.boundaries_3d = std::move(boundaries.second);
+        if (cancellation_requested(cancellation)) return SegmentationCancelled{};
     }
     if (requested_products.count_matrix) {
         result.count_matrix = build_count_matrix(data, bm_data, result.cell_ids);
+        if (cancellation_requested(cancellation)) return SegmentationCancelled{};
     }
 
     if (requested_products.diagnostics) {
@@ -461,6 +503,7 @@ SegmentationOutcome finish_segmentation(
                 make_neighborhood_diagnostics(*ncv_report);
         }
         result.diagnostics = std::move(diagnostics);
+        if (cancellation_requested(cancellation)) return SegmentationCancelled{};
     }
 
     result.resolved_options = options;
@@ -486,16 +529,15 @@ SegmentationOutcome run_segmentation_impl(
     const CancellationToken& cancellation
 ) {
     validate_request(request);
+    ScopedNativeExecution execution_scope(request.execution.native_threads);
     if (cancellation_requested(cancellation)) return SegmentationCancelled{};
-
-    ScopedNativeThreads thread_scope(request.execution.native_threads);
 
     ResolvedSegmentationOptions options;
     options.molecules = request.molecules.options;
     options.prior = request.prior;
     options.segmentation = request.segmentation;
     options.neighborhood_composition = request.neighborhood_composition;
-    options.execution.native_threads = thread_scope.effective_threads();
+    options.execution = request.execution;
 
     try {
         fill_and_check_molecule_input_options(options.molecules);
@@ -520,7 +562,11 @@ SegmentationOutcome run_segmentation_impl(
 
     MoleculeData data;
     try {
-        data = load_molecules(request.molecules.path, options.molecules, options.prior);
+        data = load_molecules(
+            request.molecules.path,
+            options.molecules,
+            options.prior,
+            options.execution.use_arrow_threads);
     } catch (const std::exception& error) {
         throw SegmentationError(SegmentationErrorCode::MoleculeInput, error.what());
     }
@@ -548,7 +594,10 @@ SegmentationOutcome run_segmentation_impl(
     if (options.prior.type != PriorInputType::None) {
         try {
             const auto [scale, scale_standard_deviation] = load_prior_segmentation(
-                data, options.prior, options.molecules.min_molecules_per_cell);
+                data,
+                options.prior,
+                options.molecules.min_molecules_per_cell,
+                options.execution.use_arrow_threads);
             if (options.prior.estimate_scale_from_prior && scale > 0.0) {
                 options.segmentation.scale = scale;
                 options.segmentation.scale_std = std::to_string(scale_standard_deviation);
@@ -557,6 +606,7 @@ SegmentationOutcome run_segmentation_impl(
             throw SegmentationError(SegmentationErrorCode::PriorInput, error.what());
         }
     }
+    if (cancellation_requested(cancellation)) return SegmentationCancelled{};
 
     if (options.segmentation.n_cells_init <= 0) {
         options.segmentation.n_cells_init = infer_initial_cell_count(
@@ -588,6 +638,7 @@ SegmentationOutcome run_segmentation_impl(
     for (int i = 0; i < data.n_molecules(); ++i) {
         data.confidence[i] = confidence_details.fit_result.assignment_probs(i, 0);
     }
+    if (cancellation_requested(cancellation)) return SegmentationCancelled{};
 
     const auto adjacency = build_molecule_graph(
         data,
@@ -628,6 +679,7 @@ SegmentationOutcome run_segmentation_impl(
             /*verbose=*/false);
         molecule_clusters = clustering_result->assignment;
     }
+    if (cancellation_requested(cancellation)) return SegmentationCancelled{};
 
     NativeRunProvenance provenance;
     provenance.baysor_version = BAYSOR_VERSION;
@@ -639,7 +691,10 @@ SegmentationOutcome run_segmentation_impl(
         {RandomSubstream::NeighborhoodComposition, neighborhood_seed},
         {RandomSubstream::Diagnostics, diagnostics_seed}
     };
-    provenance.effective_native_threads = thread_scope.effective_threads();
+    provenance.requested_native_threads = request.execution.native_threads;
+    provenance.configured_openmp_max_threads = execution_scope.configured_max_threads();
+    provenance.openmp_dynamic_enabled = execution_scope.dynamic_enabled();
+    provenance.arrow_threads_enabled = request.execution.use_arrow_threads;
 
     if (data.is_3d()) {
         return finish_segmentation<3>(

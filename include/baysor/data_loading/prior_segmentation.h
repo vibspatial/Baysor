@@ -68,7 +68,8 @@ ImageSegResult load_prior_from_image(
 std::pair<double, double> load_prior_segmentation(
     MoleculeData& data,
     const PriorInputOptions& prior_opts,
-    int min_molecules_per_cell = 3
+    int min_molecules_per_cell = 3,
+    bool use_arrow_threads = true
 );
 
 /// Filter segments with too few molecules. Zeros out labels for small segments.

@@ -29,11 +29,13 @@
 #include <Eigen/Dense>
 #include <omp.h>
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <limits>
 #include <fstream>
 #include <sstream>
 #include <string>
+#include <thread>
 #include <filesystem>
 #include <unordered_map>
 #include <unordered_set>
@@ -932,7 +934,8 @@ TEST(DataLoading, LoadParquetWithTwoPassFiltersAndPriorColumn) {
     prior.unassigned_label = "UNASSIGNED";
     prior.min_molecules_per_segment = 2;
 
-    auto data = baysor::load_molecules(path, opts, prior);
+    auto data = baysor::load_molecules(
+        path, opts, prior, /*use_arrow_threads=*/false);
 
     EXPECT_EQ(data.n_molecules(), 4);
     EXPECT_EQ(data.gene_names.size(), 2u);
@@ -3088,6 +3091,68 @@ TEST(ColorUtils, GeneCompositionColorEmbeddingStreamingMatchesPrecomputedModel) 
 // ============================================================================
 // Main BMM loop
 // ============================================================================
+
+TEST(BmmLoop, PreCancelledRunStopsBeforeWarmStart) {
+    auto data = make_disconnected_bmm_data();
+    const auto assignments_before = data.assignment;
+    baysor::CancellationSource source;
+    ASSERT_TRUE(source.request_cancellation());
+    const auto token = source.token();
+
+    const auto status = baysor::bmm(
+        data,
+        /*min_molecules_drop=*/2,
+        /*n_iters=*/100,
+        /*assignment_history_depth=*/10,
+        /*verbose=*/false,
+        /*component_split_step=*/3,
+        /*refine=*/true,
+        /*freeze_composition=*/false,
+        /*freeze_position=*/false,
+        /*freeze_components=*/false,
+        /*tol=*/0.0,
+        /*min_molecules_display=*/2,
+        /*single_thread_random_state=*/nullptr,
+        /*parallel_random_seed=*/1,
+        &token);
+
+    EXPECT_EQ(status, baysor::BmmRunStatus::Cancelled);
+    EXPECT_EQ(data.assignment, assignments_before);
+    EXPECT_TRUE(data.assignment_history.empty());
+    EXPECT_TRUE(data.n_components_trace.empty());
+}
+
+TEST(BmmLoop, CancellationRequestedDuringIterationsStopsAtABoundary) {
+    auto data = make_disconnected_bmm_data();
+    baysor::CancellationSource source;
+    const auto token = source.token();
+    std::thread canceller([source]() mutable {
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        source.request_cancellation();
+    });
+
+    const auto status = baysor::bmm(
+        data,
+        /*min_molecules_drop=*/2,
+        /*n_iters=*/1000000,
+        /*assignment_history_depth=*/1,
+        /*verbose=*/false,
+        /*component_split_step=*/3,
+        /*refine=*/true,
+        /*freeze_composition=*/false,
+        /*freeze_position=*/false,
+        /*freeze_components=*/false,
+        /*tol=*/0.0,
+        /*min_molecules_display=*/2,
+        /*single_thread_random_state=*/nullptr,
+        /*parallel_random_seed=*/1,
+        &token);
+    canceller.join();
+
+    EXPECT_EQ(status, baysor::BmmRunStatus::Cancelled);
+    EXPECT_LT(data.n_components_trace.size(), 1000001U);
+    EXPECT_LE(data.assignment_history.size(), 1U);
+}
 
 TEST(BmmLoop, StableDisconnectedComponentsRemainStable) {
     auto data = make_disconnected_bmm_data();

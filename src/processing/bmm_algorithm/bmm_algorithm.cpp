@@ -529,15 +529,20 @@ estimate_assignment_by_history(const BmmData<N>& data) {
 // ============================================================================
 
 template<int N>
-void bmm(BmmData<N>& data,
+BmmRunStatus bmm(BmmData<N>& data,
          int min_molecules_drop, int n_iters,
          int assignment_history_depth, bool verbose,
          int component_split_step, bool refine,
          bool freeze_composition, bool freeze_position, bool freeze_components,
          double tol, int min_molecules_display,
          Xoshiro256pp* single_thread_random_state,
-         std::uint64_t parallel_random_seed)
+         std::uint64_t parallel_random_seed,
+         const CancellationToken* cancellation)
 {
+    const auto cancellation_requested = [&]() noexcept {
+        return cancellation != nullptr && cancellation->is_cancellation_requested();
+    };
+
     // Display threshold: matches Julia's min_molecules_per_cell for the progress bar.
     // Drop threshold: matches Julia's hardcoded min_n_samples=2 in drop_unused_components!
     const int disp_thresh = (min_molecules_display > 0) ? min_molecules_display : min_molecules_drop;
@@ -574,11 +579,19 @@ void bmm(BmmData<N>& data,
     std::vector<double> change_fracs;
     change_fracs.reserve(n_iters);
 
-    // Initial trace + maximize to warm-start parameters
+    // Initial trace + maximize to warm-start parameters. Observe cancellation
+    // before this state transition and then only after complete iterations.
+    if (cancellation_requested()) return BmmRunStatus::Cancelled;
     trace_n_components(data, disp_thresh);
     maximize(data, freeze_composition, freeze_position);
 
     for (int iter = 1; iter <= n_iters; ++iter) {
+        // TODO(cancellation-latency): If profiling shows that completing one
+        // iteration responds too slowly, add coordinated checkpoints inside
+        // long-running phases. Every OpenMP worker must still leave and join
+        // its parallel region before bmm() returns.
+        if (cancellation_requested()) return BmmRunStatus::Cancelled;
+
         // Update prior probabilities: each component's prior = n_samples
         for (auto& comp : data.components) {
             comp.prior_probability = static_cast<double>(comp.n_samples);
@@ -634,9 +647,12 @@ void bmm(BmmData<N>& data,
                 break;
             }
         }
+
+        if (cancellation_requested()) return BmmRunStatus::Cancelled;
     }
 
     // Refinement phase
+    if (cancellation_requested()) return BmmRunStatus::Cancelled;
     if (refine) {
         if (!data.assignment_history.empty()) {
             auto [new_assign, conf] = estimate_assignment_by_history(data);
@@ -654,11 +670,17 @@ void bmm(BmmData<N>& data,
             spdlog::info("Post-refine: {}", build_diag_str());
         }
     }
+
+    return cancellation_requested() ? BmmRunStatus::Cancelled : BmmRunStatus::Completed;
 }
 
 // Explicit instantiations
-template void bmm<2>(BmmData<2>&, int, int, int, bool, int, bool, bool, bool, bool, double, int, Xoshiro256pp*, std::uint64_t);
-template void bmm<3>(BmmData<3>&, int, int, int, bool, int, bool, bool, bool, bool, double, int, Xoshiro256pp*, std::uint64_t);
+template BmmRunStatus bmm<2>(
+    BmmData<2>&, int, int, int, bool, int, bool, bool, bool, bool, double, int,
+    Xoshiro256pp*, std::uint64_t, const CancellationToken*);
+template BmmRunStatus bmm<3>(
+    BmmData<3>&, int, int, int, bool, int, bool, bool, bool, bool, double, int,
+    Xoshiro256pp*, std::uint64_t, const CancellationToken*);
 template EstepStats expect_dirichlet_spatial<2>(BmmData<2>&, bool, Xoshiro256pp*, std::uint64_t);
 template EstepStats expect_dirichlet_spatial<3>(BmmData<3>&, bool, Xoshiro256pp*, std::uint64_t);
 template void maximize<2>(BmmData<2>&, bool, bool);

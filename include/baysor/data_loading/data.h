@@ -50,7 +50,8 @@ struct MoleculeData {
 MoleculeData load_molecules(
     const std::string& path,
     const MoleculeInputOptions& opts,
-    const PriorInputOptions& prior_opts = PriorInputOptions{}
+    const PriorInputOptions& prior_opts = PriorInputOptions{},
+    bool use_arrow_threads = true
 );
 
 /// Internal: read a tabular file (CSV or Parquet) into raw column vectors.
@@ -60,7 +61,11 @@ struct RawTableData {
     std::vector<std::string> gene_str; // raw gene strings
     bool has_z = false;
 };
-RawTableData read_tabular_file(const std::string& path, const MoleculeInputOptions& opts);
+RawTableData read_tabular_file(
+    const std::string& path,
+    const MoleculeInputOptions& opts,
+    bool use_arrow_threads = true
+);
 
 /// Encode gene name strings to integer IDs (1-based).
 /// Sorts unique names alphabetically, assigns 1..N.
@@ -77,9 +82,17 @@ void filter_genes_by_pattern(MoleculeData& data, const std::vector<std::string>&
 
 /// Read a string column from a CSV or Parquet file by name.
 /// Used for loading prior segmentation from a column in the molecule file.
-std::vector<std::string> read_string_column(const std::string& path, const std::string& col_name);
+std::vector<std::string> read_string_column(
+    const std::string& path,
+    const std::string& col_name,
+    bool use_arrow_threads = true
+);
 
 /// Read a numeric column from a CSV or Parquet file by name.
-std::vector<double> read_double_column(const std::string& path, const std::string& col_name);
+std::vector<double> read_double_column(
+    const std::string& path,
+    const std::string& col_name,
+    bool use_arrow_threads = true
+);
 
 } // namespace baysor
