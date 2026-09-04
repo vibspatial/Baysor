@@ -188,10 +188,16 @@ and `method` with default `"ri"`.
 
 `SegmentationExecutionOptions::native_threads` controls Baysor's call-scoped
 OpenMP maximum. A positive value requests that number of threads, `0` inherits
-the caller's configured OpenMP maximum, and a negative value is invalid.
+the caller's configured OpenMP maximum, and a negative value is invalid. It is
+not a total process thread cap: the call applies this request through the OpenMP
+runtime and does not resize Arrow's separate process-global thread pools.
+
 `use_arrow_threads` independently enables or disables Arrow's parallel CSV and
-Parquet decoding and defaults to `true`. It does not set the size of Arrow's
-process-global CPU pool, and `native_threads` does not include Arrow threads.
+Parquet decoding and defaults to `true`. It is a Boolean decoding policy, not an
+Arrow thread-count setting. When enabled, the available concurrency is governed
+by Arrow's process-level configuration; when disabled, the covered readers use
+their serial decoding paths. Neither setting promises that the process contains
+no other library or background threads.
 
 ### Requested products
 
@@ -275,10 +281,14 @@ threads it should maintain:
 concurrent worker processes * OpenMP threads per worker <= allocated CPU cores
 ```
 
-Arrow I/O concurrency and per-tile memory are budgeted separately. This model is
-compatible with a Dask nanny supervising one worker process: cancellation is
-cooperative within the process, while forced termination and guaranteed memory
-reclamation remain supervisor responsibilities.
+Arrow reader concurrency and per-tile memory are budgeted separately. In
+particular, changing `native_threads` for a call does not resize an Arrow pool
+that the worker process has already initialized. Process-level deployment must
+therefore configure Arrow separately or set `use_arrow_threads = false` when
+parallel decoding is not part of its resource budget. This model is compatible
+with a Dask nanny supervising one worker process: cancellation is cooperative
+within the process, while forced termination and guaranteed memory reclamation
+remain supervisor responsibilities.
 
 ## Return and failure contract
 
