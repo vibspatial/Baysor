@@ -789,6 +789,14 @@ named I/O-thread policy or document and test the selected fixed behaviour. The
 OpenMP request and its provenance must not imply that Arrow threads are included
 in the same budget.
 
+The supported native entry context is a top-level caller that is not already
+inside an active OpenMP parallel region. Calling Baysor from inside such a region
+can invoke nested-parallelism and active-level policies that change or serialize
+the requested teams. N3 must detect this condition before applying a thread
+override, fail with a documented structured error, and test that behaviour. This
+restriction does not affect the normal Python/Dask worker entry path or the
+OpenMP regions created internally by Baysor.
+
 Sequential repeated calls in one process are supported. Concurrent segmentation
 calls in one process remain unsupported unless N3 proves that their OpenMP
 configuration, random state, logging, and dependencies are isolated. This
@@ -849,8 +857,11 @@ Deliverables:
   OpenMP maximum, and dynamic-team setting from any actually observed team size;
 - inventory Arrow CSV and Parquet reader threading and make its relationship to
   the OpenMP budget explicit, without implying that one setting controls both;
+- require a top-level native entry context and reject a call made from an active
+  OpenMP parallel region before changing its thread configuration;
 - add focused tests for zero/inherited configuration, positive thread requests,
-  restoration across every exit path, and thread provenance;
+  restoration across every exit path, nested-entry rejection, and thread
+  provenance;
 - verify that no call replaces a process-wide logger, calls `std::exit`, or
   relies on CLI-owned mutable state;
 - make `baysor_lib` consumable through `add_subdirectory(...)`, including
@@ -866,8 +877,9 @@ a supervisor policy outside this repository.
 Exit criterion: direct native tests cover success, invalid input, cancellation,
 owned-result lifetime, repeated calls, and OpenMP setting/restoration semantics;
 thread provenance cannot be mistaken for an observed team size; Arrow I/O
-threading and the supported same-process concurrency model are documented; and a
-clean CMake consumer can link the library without modifying the Baysor checkout.
+threading, the top-level entry requirement, and the supported same-process
+concurrency model are documented; and a clean CMake consumer can link the
+library without modifying the Baysor checkout.
 
 Handoff: select and review the green N3 commit. `baysor-python` pins that exact
 commit as its Slice 1A.2 source dependency and records both the upstream baseline
