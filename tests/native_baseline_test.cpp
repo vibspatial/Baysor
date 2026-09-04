@@ -1,5 +1,7 @@
 #include <gtest/gtest.h>
 
+#include "baysor/reporting/output.h"
+#include "baysor/segmentation/segmentation.h"
 #include "baysor/utils/options.h"
 
 #include <nlohmann/json.hpp>
@@ -364,6 +366,50 @@ void compare_resolved_options(const fs::path& actual_path, const fs::path& refer
             "Resolved gene composition neighborhood changed");
 }
 
+void compare_resolved_options(
+    const baysor::ResolvedSegmentationOptions& actual,
+    const fs::path& reference_path
+) {
+    const baysor::RunOptions reference = baysor::load_config(reference_path.string());
+
+    require(actual.molecules.min_molecules_per_gene == reference.molecules.min_molecules_per_gene,
+            "Resolved min_molecules_per_gene changed");
+    require(actual.molecules.min_molecules_per_cell == reference.molecules.min_molecules_per_cell,
+            "Resolved min_molecules_per_cell changed");
+    require(actual.molecules.confidence_nn_id == reference.molecules.confidence_nn_id,
+            "Resolved confidence_nn_id changed");
+    require(actual.prior.type == reference.prior.type, "Resolved prior type changed");
+    require(actual.prior.column_name == reference.prior.column_name,
+            "Resolved prior column changed");
+    require(actual.prior.unassigned_label == reference.prior.unassigned_label,
+            "Resolved unassigned prior label changed");
+    require(actual.prior.min_molecules_per_segment == reference.prior.min_molecules_per_segment,
+            "Resolved min_molecules_per_segment changed");
+    require(actual.prior.estimate_scale_from_prior == reference.prior.estimate_scale_from_prior,
+            "Resolved prior scale policy changed");
+    require_near(actual.segmentation.scale, reference.segmentation.scale, 0.0, 0.0,
+                 "Resolved scale");
+    require(actual.segmentation.scale_std == reference.segmentation.scale_std,
+            "Resolved scale_std changed");
+    require(actual.segmentation.cluster_method == reference.segmentation.cluster_method,
+            "Resolved cluster method changed");
+    require(actual.segmentation.n_clusters == reference.segmentation.n_clusters,
+            "Resolved cluster count changed");
+    require_near(
+        actual.segmentation.prior_segmentation_confidence,
+        reference.segmentation.prior_segmentation_confidence,
+        0.0,
+        0.0,
+        "Resolved prior segmentation confidence");
+    require(actual.segmentation.iters == reference.segmentation.iters,
+            "Resolved iteration count changed");
+    require(actual.segmentation.n_cells_init == reference.segmentation.n_cells_init,
+            "Resolved n_cells_init changed");
+    require(actual.neighborhood_composition.neighborhood_size ==
+                reference.plotting.gene_composition_neighborhood,
+            "Resolved gene composition neighborhood changed");
+}
+
 std::string quote_argument(const fs::path& value) {
     const std::string text = value.string();
     require(text.find('"') == std::string::npos, "Test path contains an unsupported quote: " + text);
@@ -430,6 +476,95 @@ TEST(NativeBaseline, PreExtractionCliMatchesSemanticReference) {
             output.path() / "segmentation_params.dump.toml",
             reference_dir / "resolved_params.toml"
         );
+    } catch (const std::exception& error) {
+        FAIL() << error.what();
+    }
+}
+
+TEST(SegmentationOperation, DirectCallMatchesNativeBaseline) {
+    const fs::path fixture_dir(BAYSOR_TEST_FIXTURE_DIR);
+    const fs::path reference_dir = fixture_dir / "reference";
+    const baysor::RunOptions config = baysor::load_config(
+        (fixture_dir / "config.toml").string());
+
+    baysor::SegmentationRequest request;
+    request.molecules.path = (fixture_dir / "molecules.csv").string();
+    request.molecules.options = config.molecules;
+    request.prior = config.prior;
+    request.segmentation = config.segmentation;
+    request.neighborhood_composition.neighborhood_size =
+        config.plotting.gene_composition_neighborhood;
+    request.neighborhood_composition.method = config.plotting.ncv_method;
+    request.requested_products = baysor::SegmentationProducts::none();
+    request.requested_products.molecule_assignments = true;
+    request.requested_products.molecule_confidence = true;
+    request.requested_products.assignment_confidence = true;
+    request.requested_products.cell_statistics = true;
+    request.requested_products.boundaries = true;
+    request.requested_products.count_matrix = true;
+    request.requested_products.diagnostics = true;
+    request.random_seed = baysor::kDefaultSegmentationSeed;
+    request.execution.native_threads = 1;
+
+    const auto outcome = baysor::run_segmentation(request, baysor::CancellationToken{});
+    ASSERT_TRUE(std::holds_alternative<baysor::SegmentationResult>(outcome));
+    const auto& result = std::get<baysor::SegmentationResult>(outcome);
+
+    EXPECT_EQ(result.molecules.n_molecules(), static_cast<int>(result.cell_assignments.size()));
+    EXPECT_EQ(result.molecules.n_molecules(), static_cast<int>(result.molecules.confidence.size()));
+    EXPECT_EQ(result.molecules.n_molecules(), static_cast<int>(result.assignment_confidence.size()));
+    EXPECT_TRUE(result.cell_statistics.has_value());
+    EXPECT_TRUE(result.boundaries_2d.has_value());
+    EXPECT_FALSE(result.boundaries_3d.has_value());
+    EXPECT_TRUE(result.count_matrix.has_value());
+    EXPECT_TRUE(result.diagnostics.has_value());
+    EXPECT_TRUE(result.produced_products.molecule_assignments);
+    EXPECT_TRUE(result.produced_products.molecule_confidence);
+    EXPECT_TRUE(result.produced_products.assignment_confidence);
+    EXPECT_FALSE(result.produced_products.molecule_clusters);
+    EXPECT_FALSE(result.produced_products.neighborhood_composition_colors);
+    EXPECT_TRUE(result.produced_products.cell_statistics);
+    EXPECT_TRUE(result.produced_products.boundaries);
+    EXPECT_TRUE(result.produced_products.count_matrix);
+    EXPECT_TRUE(result.produced_products.diagnostics);
+    EXPECT_EQ(result.provenance.random_seed, baysor::kDefaultSegmentationSeed);
+    EXPECT_EQ(result.provenance.random_substream_contract_version,
+              baysor::kRandomSubstreamContractVersion);
+    EXPECT_EQ(result.provenance.random_substreams.size(), 4U);
+    EXPECT_EQ(result.provenance.effective_native_threads, 1);
+    EXPECT_EQ(result.provenance.baysor_version, "0.8.3");
+
+    TemporaryDirectory output;
+    ASSERT_NO_THROW(baysor::save_segmented_df(
+        result, (output.path() / "segmentation.csv").string()));
+    ASSERT_NO_THROW(baysor::save_cell_stat_df(
+        result, (output.path() / "segmentation_cell_stats.csv").string()));
+    ASSERT_NO_THROW(baysor::save_matrix_to_tsv(
+        result, (output.path() / "segmentation_counts.tsv").string()));
+    ASSERT_NO_THROW(baysor::save_polygons_geojson(
+        result,
+        (output.path() / "segmentation_polygons_2d.json").string(),
+        "FeatureCollection"));
+
+    try {
+        const auto labels = compare_molecule_tables(
+            output.path() / "segmentation.csv",
+            reference_dir / "segmentation.csv");
+        compare_cell_statistics(
+            output.path() / "segmentation_cell_stats.csv",
+            reference_dir / "segmentation_cell_stats.csv",
+            labels);
+        compare_count_matrices(
+            output.path() / "segmentation_counts.tsv",
+            reference_dir / "segmentation_counts.tsv",
+            labels);
+        compare_polygons(
+            output.path() / "segmentation_polygons_2d.json",
+            reference_dir / "segmentation_polygons_2d.json",
+            labels);
+        compare_resolved_options(
+            result.resolved_options,
+            reference_dir / "resolved_params.toml");
     } catch (const std::exception& error) {
         FAIL() << error.what();
     }
