@@ -63,7 +63,9 @@ struct NeighborhoodCompositionOptions {
 
 /// Requested native execution resources. A positive value requests that many
 /// threads, zero leaves selection to the already configured native runtime, and
-/// a negative value is invalid.
+/// a negative value is invalid. Callers requiring deterministic semantic replay
+/// must request exactly one thread; parallel execution is not guaranteed to be
+/// deterministic, even with an unchanged seed and thread count.
 struct SegmentationExecutionOptions {
     int native_threads = 0;
 };
@@ -109,6 +111,10 @@ struct SegmentationRequest {
     SegmentationOptions segmentation;
     NeighborhoodCompositionOptions neighborhood_composition;
     SegmentationProducts requested_products;
+    /// Master seed for the versioned, run-local random streams. Together with
+    /// one-thread execution, unchanged input, options, build, and platform, this
+    /// guarantees repeatable semantic results. Parallel runs are not guaranteed
+    /// deterministic.
     std::uint64_t random_seed = kDefaultSegmentationSeed;
     SegmentationExecutionOptions execution;
 };
@@ -242,10 +248,10 @@ private:
 
 /// Execute one complete native segmentation.
 ///
-/// Native Slice N1 defines this source-level contract. Native Slice N2 moves the
-/// existing CLI scientific orchestration behind it and supplies the definition.
-/// Failures throw SegmentationError; cooperative cancellation returns
-/// SegmentationCancelled.
+/// The operation loads the prepared molecule input, resolves data-dependent
+/// options, runs the scientific workflow, and returns owned result values. It
+/// does not choose filenames or write output artifacts. Failures throw
+/// SegmentationError; cooperative cancellation returns SegmentationCancelled.
 [[nodiscard]] SegmentationOutcome run_segmentation(
     const SegmentationRequest& request,
     const CancellationToken& cancellation

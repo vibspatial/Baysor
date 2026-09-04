@@ -10,6 +10,7 @@
 namespace baysor {
 
 struct MoleculeData;
+struct SegmentationResult;
 
 enum class OutputStyle {
     Legacy,
@@ -55,6 +56,10 @@ void save_segmented_df_parquet(const MoleculeData& data,
                                const std::vector<double>* assignment_confidence = nullptr,
                                const std::vector<int>* cluster = nullptr);
 
+/// Serialize the molecule table already materialized by run_segmentation().
+void save_segmented_df(const SegmentationResult& result, const std::string& path);
+void save_segmented_df_parquet(const SegmentationResult& result, const std::string& path);
+
 /// Save cell statistics to CSV
 void save_cell_stat_df(const Eigen::MatrixXd& stats,
                        const std::vector<std::string>& cell_names,
@@ -65,6 +70,10 @@ void save_cell_stat_df_parquet(const Eigen::MatrixXd& stats,
                                const std::vector<std::string>& cell_names,
                                const std::vector<std::string>& col_names,
                                const std::string& path);
+
+/// Serialize the cell statistics already materialized by run_segmentation().
+void save_cell_stat_df(const SegmentationResult& result, const std::string& path);
+void save_cell_stat_df_parquet(const SegmentationResult& result, const std::string& path);
 
 /// Per-column attributes that can be written into a Loom col_attrs group.
 /// Each value is either a vector of strings or a vector of doubles.
@@ -99,8 +108,16 @@ void save_matrix_to_tsv(const Eigen::SparseMatrix<double>& matrix,
                         const std::vector<std::string>& cell_names,
                         const std::string& path);
 
+/// Serialize the count matrix already materialized by run_segmentation().
+void save_matrix_to_tsv(const SegmentationResult& result, const std::string& path);
+
 /// Convert polygons to GeoJSON and save
 void save_polygons_geojson(const PolygonCollection& polygons,
+                           const std::string& path,
+                           const std::string& format = "FeatureCollection");
+
+/// Serialize the 2D boundaries already materialized by run_segmentation().
+void save_polygons_geojson(const SegmentationResult& result,
                            const std::string& path,
                            const std::string& format = "FeatureCollection");
 

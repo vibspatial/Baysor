@@ -599,7 +599,8 @@ Eigen::MatrixXf estimate_gene_vectors(
     const std::vector<int>& gene_ids,
     int n_components,
     const std::string& method,
-    bool per_molecule
+    bool per_molecule,
+    unsigned int random_seed
 ) {
     int n_genes = static_cast<int>(count_matrix.rows());
     int n_mols = static_cast<int>(count_matrix.cols());
@@ -610,7 +611,7 @@ Eigen::MatrixXf estimate_gene_vectors(
 
     // Random projection matrix, stored as components x genes so dense_times_sparse
     // can work column-wise against the sparse count matrix.
-    std::mt19937 rng(42);
+    std::mt19937 rng(random_seed);
     std::normal_distribution<float> normal(0.0f, 1.0f);
     Eigen::MatrixXf random_vectors_t(n_components, n_genes);
     for (int i = 0; i < n_genes; ++i)

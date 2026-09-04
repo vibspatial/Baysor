@@ -1,4 +1,5 @@
 #include "baysor/reporting/output.h"
+#include "baysor/segmentation/segmentation.h"
 #include "baysor/data_loading/data.h"
 
 #include <arrow/api.h>
@@ -874,6 +875,109 @@ void save_polygon_stack_geoparquet(const PolygonStack& polygons,
         metadata
     );
     write_parquet_table(table, out_paths.polygons_3d);
+}
+
+void save_segmented_df(const SegmentationResult& result, const std::string& path) {
+    try {
+        save_segmented_df(
+            result.molecules,
+            result.cell_assignments,
+            result.molecules.gene_names,
+            path,
+            result.neighborhood_composition_colors.empty()
+                ? nullptr
+                : &result.neighborhood_composition_colors,
+            result.assignment_confidence.empty() ? nullptr : &result.assignment_confidence,
+            result.molecule_clusters.empty() ? nullptr : &result.molecule_clusters);
+    } catch (const std::exception& error) {
+        throw SegmentationError(SegmentationErrorCode::Serialization, error.what());
+    }
+}
+
+void save_segmented_df_parquet(const SegmentationResult& result, const std::string& path) {
+    try {
+        save_segmented_df_parquet(
+            result.molecules,
+            result.cell_assignments,
+            result.molecules.gene_names,
+            path,
+            result.neighborhood_composition_colors.empty()
+                ? nullptr
+                : &result.neighborhood_composition_colors,
+            result.assignment_confidence.empty() ? nullptr : &result.assignment_confidence,
+            result.molecule_clusters.empty() ? nullptr : &result.molecule_clusters);
+    } catch (const std::exception& error) {
+        throw SegmentationError(SegmentationErrorCode::Serialization, error.what());
+    }
+}
+
+void save_cell_stat_df(const SegmentationResult& result, const std::string& path) {
+    if (!result.cell_statistics) {
+        throw SegmentationError(
+            SegmentationErrorCode::Serialization,
+            "Cell statistics were not materialized for this segmentation result.");
+    }
+    try {
+        save_cell_stat_df(
+            result.cell_statistics->values,
+            result.cell_statistics->cell_ids,
+            result.cell_statistics->columns,
+            path);
+    } catch (const std::exception& error) {
+        throw SegmentationError(SegmentationErrorCode::Serialization, error.what());
+    }
+}
+
+void save_cell_stat_df_parquet(const SegmentationResult& result, const std::string& path) {
+    if (!result.cell_statistics) {
+        throw SegmentationError(
+            SegmentationErrorCode::Serialization,
+            "Cell statistics were not materialized for this segmentation result.");
+    }
+    try {
+        save_cell_stat_df_parquet(
+            result.cell_statistics->values,
+            result.cell_statistics->cell_ids,
+            result.cell_statistics->columns,
+            path);
+    } catch (const std::exception& error) {
+        throw SegmentationError(SegmentationErrorCode::Serialization, error.what());
+    }
+}
+
+void save_matrix_to_tsv(const SegmentationResult& result, const std::string& path) {
+    if (!result.count_matrix) {
+        throw SegmentationError(
+            SegmentationErrorCode::Serialization,
+            "The count matrix was not materialized for this segmentation result.");
+    }
+    try {
+        const Eigen::SparseMatrix<double> matrix = result.count_matrix->values.cast<double>();
+        save_matrix_to_tsv(
+            matrix,
+            result.count_matrix->gene_names,
+            result.count_matrix->cell_ids,
+            path);
+    } catch (const std::exception& error) {
+        throw SegmentationError(SegmentationErrorCode::Serialization, error.what());
+    }
+}
+
+void save_polygons_geojson(
+    const SegmentationResult& result,
+    const std::string& path,
+    const std::string& format
+) {
+    if (!result.boundaries_2d) {
+        throw SegmentationError(
+            SegmentationErrorCode::Serialization,
+            "The 2D boundaries were not materialized for this segmentation result.");
+    }
+    try {
+        save_polygons_geojson(*result.boundaries_2d, path, format);
+    } catch (const std::exception& error) {
+        throw SegmentationError(SegmentationErrorCode::Serialization, error.what());
+    }
 }
 
 } // namespace baysor
