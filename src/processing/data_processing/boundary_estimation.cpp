@@ -362,7 +362,8 @@ PolygonCollection build_polygons_for_cells(
     const Eigen::MatrixXd& pos_data,
     const std::vector<int>& cell_labels,
     const std::vector<std::string>* cell_names,
-    double offset_rel
+    double offset_rel,
+    Xoshiro256pp* random_state
 ) {
     const int n = static_cast<int>(pos_data.cols());
     if (n < 3) return {};
@@ -371,7 +372,7 @@ PolygonCollection build_polygons_for_cells(
     if (max_label <= 0) return {};
 
     const Eigen::MatrixXd pos2d = pos_data.topRows(2);
-    const Eigen::MatrixXd norm_pts = normalize_points(pos2d);
+    const Eigen::MatrixXd norm_pts = normalize_points(pos2d, random_state);
 
     auto bboxes = get_boundary_box_per_cell(pos2d, cell_labels, max_label);
     auto ids_per_bbox = extract_ids_per_bbox(pos2d.row(0).transpose(), pos2d.row(1).transpose(), bboxes);
@@ -518,16 +519,17 @@ PolygonCollection boundary_polygons(
     const Eigen::MatrixXd& pos_data,
     const std::vector<int>& cell_labels,
     const std::vector<std::string>* cell_names,
-    double offset_rel
+    double offset_rel,
+    Xoshiro256pp* random_state
 ) {
     if (pos_data.rows() == 3) {
-        return build_polygons_for_cells(pos_data, cell_labels, cell_names, offset_rel);
+        return build_polygons_for_cells(pos_data, cell_labels, cell_names, offset_rel, random_state);
     }
     if (pos_data.rows() != 2) {
         spdlog::error("Only 2D and 3D data are supported for boundary estimation");
         return {};
     }
-    return build_polygons_for_cells(pos_data, cell_labels, cell_names, offset_rel);
+    return build_polygons_for_cells(pos_data, cell_labels, cell_names, offset_rel, random_state);
 }
 
 std::vector<Eigen::MatrixXd> boundary_polygons_from_grid(
@@ -577,13 +579,15 @@ std::pair<PolygonCollection, PolygonStack> boundary_polygons_auto(
     const std::vector<int>& assignment,
     bool estimate_per_z,
     const std::vector<std::string>* cell_names,
-    bool verbose
+    bool verbose,
+    Xoshiro256pp* random_state
 ) {
     if (verbose) {
         spdlog::info("Estimating boundary polygons...");
     }
 
-    PolygonCollection poly_joined = boundary_polygons(pos_data, assignment, cell_names);
+    PolygonCollection poly_joined = boundary_polygons(
+        pos_data, assignment, cell_names, /*offset_rel=*/0.01, random_state);
     PolygonStack poly_stack;
     poly_stack.push_back({"2d", poly_joined});
 
@@ -650,7 +654,10 @@ std::pair<PolygonCollection, PolygonStack> boundary_polygons_auto(
         for (int i = 0; i < static_cast<int>(ids.size()); ++i) {
             ass_layer[i] = assignment[ids[i]];
         }
-        poly_stack.push_back({layer_names[layer], boundary_polygons(pos_layer, ass_layer, cell_names)});
+        poly_stack.push_back({
+            layer_names[layer],
+            boundary_polygons(pos_layer, ass_layer, cell_names, /*offset_rel=*/0.01, random_state)
+        });
     }
 
     return {poly_joined, poly_stack};
