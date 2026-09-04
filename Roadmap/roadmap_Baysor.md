@@ -172,6 +172,11 @@ segmentation API to expose Python-owned arrays or internal BMM objects.
 
 ### Randomness and reproducibility contract
 
+The normative caller-facing guarantee lives in the root-level
+[native segmentation API contract](../contract.md). This roadmap records its
+design rationale and the implementation and verification work needed to sustain
+it.
+
 The current feature branch, before extraction begins, is the behavioural
 starting point. N0 records the exact committed source revision used to build the
 reference CLI; the historical upstream commit remains source provenance rather
